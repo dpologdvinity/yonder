@@ -45,6 +45,12 @@ scoop bucket add yonder https://github.com/dpologdvinity/scoop-bucket
 scoop install yonder
 ```
 
+**npm / yarn / pip**
+```sh
+npm install -g yonder-cli     # or: yarn global add yonder-cli
+pip install yonder-cli        # or: uv tool install yonder-cli
+```
+
 **Go**
 ```sh
 go install github.com/dpologdvinity/yonder@latest
