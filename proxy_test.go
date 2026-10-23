@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -207,5 +208,47 @@ func TestProxyUpstreamRestart(t *testing.T) {
 
 	if resp := do(t, "GET", fr.URL, nil); resp.StatusCode != 200 {
 		t.Fatalf("back up: got %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestWithLogLine(t *testing.T) {
+	var log strings.Builder
+	now := func() time.Time { return time.Date(2026, 10, 23, 14, 3, 9, 0, time.Local) }
+	h := withLog(http.NotFoundHandler(), &log, now)
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	do(t, "GET", srv.URL+"/a?b=1", nil)
+	if want := "14:03:09  GET /a?b=1  404  127.0.0.1\n"; log.String() != want {
+		t.Errorf("log = %q, want %q", log.String(), want)
+	}
+}
+
+func loggedProxy(targetAddr string, port int) http.Handler {
+	return withLog(newProxy(targetAddr, port), io.Discard, time.Now)
+}
+
+func TestWithLogKeepsUpgrade(t *testing.T) { checkUpgrade(t, loggedProxy) }
+func TestWithLogKeepsSSE(t *testing.T)     { checkSSE(t, loggedProxy) }
+
+// syncBuf is a goroutine-safe log sink.
+type syncBuf struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (s *syncBuf) Write(p []byte) (int, error) { s.mu.Lock(); defer s.mu.Unlock(); return s.b.Write(p) }
+func (s *syncBuf) String() string              { s.mu.Lock(); defer s.mu.Unlock(); return s.b.String() }
+
+func TestWithLogUpgradeStatus(t *testing.T) {
+	log := &syncBuf{}
+	checkUpgrade(t, func(a string, p int) http.Handler { return withLog(newProxy(a, p), log, time.Now) })
+	// checkUpgrade closed the client conn; the log line lands when the proxy handler returns.
+	deadline := time.Now().Add(3 * time.Second)
+	for !strings.Contains(log.String(), "  GET /  101  ") {
+		if time.Now().After(deadline) {
+			t.Fatalf("log = %q, want a 101 line", log.String())
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

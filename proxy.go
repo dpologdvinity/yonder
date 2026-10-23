@@ -1,12 +1,16 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"time"
 )
 
 type clientHostKey struct{}
@@ -75,3 +79,49 @@ func stripLocalhostCookieDomain(h http.Header) {
 		}
 	}
 }
+
+// withLog writes one line per request: time, method, path, status, client IP.
+func withLog(h http.Handler, w io.Writer, now func() time.Time) http.Handler {
+	return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		rec := &statusRecorder{ResponseWriter: rw}
+		h.ServeHTTP(rec, r)
+		if rec.status == 0 {
+			rec.status = http.StatusOK
+		}
+		ip, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			ip = r.RemoteAddr
+		}
+		fmt.Fprintf(w, "%s  %s %s  %d  %s\n", now().Format("15:04:05"), r.Method, r.URL.RequestURI(), rec.status, ip)
+	})
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (s *statusRecorder) WriteHeader(code int) {
+	if s.status == 0 {
+		s.status = code
+	}
+	s.ResponseWriter.WriteHeader(code)
+}
+
+func (s *statusRecorder) Write(b []byte) (int, error) {
+	if s.status == 0 {
+		s.status = http.StatusOK
+	}
+	return s.ResponseWriter.Write(b)
+}
+
+// Hijack is only called for protocol upgrades, which ReverseProxy answers with 101 on the raw conn.
+func (s *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if s.status == 0 {
+		s.status = http.StatusSwitchingProtocols
+	}
+	return http.NewResponseController(s.ResponseWriter).Hijack()
+}
+
+// Unwrap lets http.ResponseController reach Flush on the real writer (SSE).
+func (s *statusRecorder) Unwrap() http.ResponseWriter { return s.ResponseWriter }
