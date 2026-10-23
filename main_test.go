@@ -98,10 +98,11 @@ func TestFileHandlerSymlinkArg(t *testing.T) {
 	if err := os.Symlink(real, link); err != nil {
 		t.Skip("symlinks not supported")
 	}
-	h, _, err := fileHandler(link)
+	h, _, closeRoot, err := fileHandler(link)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer closeRoot()
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/doc.txt", nil))
 	if rec.Body.String() != "doc" {
@@ -112,7 +113,7 @@ func TestFileHandlerSymlinkArg(t *testing.T) {
 func TestFileHandlerRejectsDotfile(t *testing.T) {
 	p := filepath.Join(t.TempDir(), ".bashrc")
 	os.WriteFile(p, []byte("x"), 0o644)
-	if _, _, err := fileHandler(p); err == nil || err.Error() != "hidden files are never shared: "+p {
+	if _, _, _, err := fileHandler(p); err == nil || err.Error() != "hidden files are never shared: "+p {
 		t.Errorf("err = %v, want hidden-file error", err)
 	}
 }

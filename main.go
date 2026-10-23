@@ -101,10 +101,11 @@ func run(args []string, stdout, stderr io.Writer, ctx context.Context) int {
 	var what string
 	port := opts.port
 	if opts.path != "" {
-		h, abs, err := fileHandler(opts.path)
+		h, abs, closeRoot, err := fileHandler(opts.path)
 		if err != nil {
 			return fail(err)
 		}
+		defer closeRoot()
 		handler, what, port = h, abs, 8000 // default listen port 8000+10000
 	} else {
 		target, err := findTarget(port)
@@ -160,21 +161,22 @@ func run(args []string, stdout, stderr io.Writer, ctx context.Context) int {
 }
 
 // fileHandler opens path for sharing: a folder is served whole, a file alone.
-func fileHandler(p string) (http.Handler, string, error) {
-	abs, err := filepath.Abs(p)
+// The caller must call closeRoot when done.
+func fileHandler(p string) (h http.Handler, abs string, closeRoot func() error, err error) {
+	abs, err = filepath.Abs(p)
 	if err != nil {
-		return nil, "", err
+		return nil, "", nil, err
 	}
 	// Resolve links first: os.Root will not follow one out of the shared folder.
 	if abs, err = filepath.EvalSymlinks(abs); err != nil {
-		return nil, "", fmt.Errorf("no such file or folder: %s", p)
+		return nil, "", nil, fmt.Errorf("no such file or folder: %s", p)
 	}
 	info, err := os.Stat(abs)
 	if err != nil {
-		return nil, "", fmt.Errorf("no such file or folder: %s", p)
+		return nil, "", nil, fmt.Errorf("no such file or folder: %s", p)
 	}
 	if !info.IsDir() && strings.HasPrefix(info.Name(), ".") {
-		return nil, "", fmt.Errorf("hidden files are never shared: %s", p)
+		return nil, "", nil, fmt.Errorf("hidden files are never shared: %s", p)
 	}
 	dir, only := abs, ""
 	if !info.IsDir() {
@@ -182,7 +184,7 @@ func fileHandler(p string) (http.Handler, string, error) {
 	}
 	root, err := os.OpenRoot(dir)
 	if err != nil {
-		return nil, "", err
+		return nil, "", nil, err
 	}
-	return newFileServer(root, only), abs, nil
+	return newFileServer(root, only), abs, root.Close, nil
 }
