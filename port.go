@@ -1,11 +1,9 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"net"
 	"strconv"
-	"syscall"
 )
 
 // listen opens the proxy listener on all interfaces.
@@ -14,7 +12,7 @@ import (
 func listen(target, explicit int) (net.Listener, error) {
 	if explicit > 0 {
 		ln, err := net.Listen("tcp", "0.0.0.0:"+strconv.Itoa(explicit))
-		if errors.Is(err, syscall.EADDRINUSE) {
+		if isAddrInUse(err) {
 			return nil, fmt.Errorf("port %d is in use", explicit)
 		}
 		if err != nil {
