@@ -32,11 +32,16 @@ func fileFixture(t *testing.T) *os.Root {
 	write(".git/config", secret)
 	write("<script>.txt", "x")
 	write("a b&c.txt", "x")
+	write("foo:bar.txt", "colon")
+	write("a?b/inner.txt", "q")
 	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte(secret), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(filepath.Join(outside, "secret.txt"), filepath.Join(dir, "out")); err != nil {
 		t.Skip("symlinks not supported")
+	}
+	if err := os.Symlink(".env", filepath.Join(dir, "envlink")); err != nil {
+		t.Fatal(err)
 	}
 	root, err := os.OpenRoot(dir)
 	if err != nil {
@@ -62,7 +67,7 @@ func TestFilesListing(t *testing.T) {
 	if rec.Code != 200 || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/html") {
 		t.Fatalf("got %d %q, want 200 text/html", rec.Code, rec.Header().Get("Content-Type"))
 	}
-	for _, want := range []string{`<meta name="viewport" content="width=device-width, initial-scale=1">`, `&lt;script&gt;.txt`, `href="a%20b&amp;c.txt"`} {
+	for _, want := range []string{`<meta name="viewport" content="width=device-width, initial-scale=1">`, `&lt;script&gt;.txt`, `href="./a%20b&amp;c.txt"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("listing lacks %q:\n%s", want, body)
 		}
@@ -131,6 +136,59 @@ func TestHumanSize(t *testing.T) {
 	for n, want := range map[int64]string{0: "0 B", 999: "999 B", 1024: "1.0 KB", 1536 * 1024: "1.5 MB"} {
 		if got := humanSize(n); got != want {
 			t.Errorf("humanSize(%d) = %q, want %q", n, got, want)
+		}
+	}
+}
+
+func TestFilesSymlinksRefused(t *testing.T) {
+	h := newFileServer(fileFixture(t), "")
+	for _, p := range []string{"/envlink", "/out"} {
+		if rec := getFile(h, p, nil); rec.Code != 404 || strings.Contains(rec.Body.String(), secret) {
+			t.Errorf("%s: got %d %q, want 404", p, rec.Code, rec.Body.String())
+		}
+	}
+	body := getFile(h, "/", nil).Body.String()
+	for _, name := range []string{"envlink", ">out"} {
+		if strings.Contains(body, name) {
+			t.Errorf("listing shows symlink %q", name)
+		}
+	}
+}
+
+func TestFilesOddNames(t *testing.T) {
+	h := newFileServer(fileFixture(t), "")
+	body := getFile(h, "/", nil).Body.String()
+	if !strings.Contains(body, `href="./foo:bar.txt"`) {
+		t.Errorf("colon name link broken:\n%s", body)
+	}
+	if rec := getFile(h, "/foo:bar.txt", nil); rec.Body.String() != "colon" {
+		t.Errorf("/foo:bar.txt: got %d %q", rec.Code, rec.Body.String())
+	}
+	if rec := getFile(h, "/a%3Fb", nil); rec.Header().Get("Location") != "/a%3Fb/" {
+		t.Errorf("folder redirect Location = %q, want /a%%3Fb/", rec.Header().Get("Location"))
+	}
+}
+
+func TestSafeRel(t *testing.T) {
+	tests := []struct {
+		path    string
+		windows bool
+		want    string
+		ok      bool
+	}{
+		{"/", false, ".", true},
+		{"/sub/b.txt", false, "sub/b.txt", true},
+		{"/.env", false, "", false},
+		{"/sub\\..\\.env", false, "", false},
+		{"/C:/x", true, "", false},
+		{"/foo:bar.txt", false, "foo:bar.txt", true},
+		{"/GIT~1/config", true, "", false},
+		{"/backup~", false, "backup~", true},
+	}
+	for _, tt := range tests {
+		got, ok := safeRel(tt.path, tt.windows)
+		if got != tt.want || ok != tt.ok {
+			t.Errorf("safeRel(%q, %v) = %q, %v; want %q, %v", tt.path, tt.windows, got, ok, tt.want, tt.ok)
 		}
 	}
 }

@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -31,7 +34,7 @@ func TestParseArgs(t *testing.T) {
 		}
 	}
 
-	bad := [][]string{{}, {"0"}, {"70000"}, {"-1"}, {"3000", "4000"}, {"3000", "--listen", "x"}, {"3000", "--listen", "70000"}, {"3000", "--nope"}}
+	bad := [][]string{{}, {""}, {"0"}, {"70000"}, {"-1"}, {"3000", "4000"}, {"3000", "--listen", "x"}, {"3000", "--listen", "70000"}, {"3000", "--nope"}}
 	for _, args := range bad {
 		if _, err := parseArgs(args); err == nil {
 			t.Errorf("parseArgs(%q): want error, got nil", args)
@@ -85,5 +88,31 @@ func TestRunMissingPath(t *testing.T) {
 	}
 	if want := "yonder: no such file or folder: /nonexistent/x\n"; errOut.String() != want {
 		t.Errorf("stderr = %q, want %q", errOut.String(), want)
+	}
+}
+
+func TestFileHandlerSymlinkArg(t *testing.T) {
+	real := filepath.Join(t.TempDir(), "doc.txt")
+	os.WriteFile(real, []byte("doc"), 0o644)
+	link := filepath.Join(t.TempDir(), "link.txt")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skip("symlinks not supported")
+	}
+	h, _, err := fileHandler(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/doc.txt", nil))
+	if rec.Body.String() != "doc" {
+		t.Errorf("got %d %q, want the linked file", rec.Code, rec.Body.String())
+	}
+}
+
+func TestFileHandlerRejectsDotfile(t *testing.T) {
+	p := filepath.Join(t.TempDir(), ".bashrc")
+	os.WriteFile(p, []byte("x"), 0o644)
+	if _, _, err := fileHandler(p); err == nil || err.Error() != "hidden files are never shared: "+p {
+		t.Errorf("err = %v, want hidden-file error", err)
 	}
 }

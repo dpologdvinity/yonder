@@ -3,10 +3,12 @@ package main
 import (
 	"fmt"
 	"html/template"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
 	"path"
+	"runtime"
 	"sort"
 	"strings"
 )
@@ -27,21 +29,22 @@ type listEntry struct{ Name, Href, Size string }
 // All access goes through os.Root, so ".." and symlinks cannot leave the shared folder.
 func newFileServer(root *os.Root, only string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		clean := path.Clean("/" + r.URL.Path)
-		rel := strings.TrimPrefix(clean, "/")
-		if rel == "" {
-			rel = "."
+		rel, ok := safeRel(r.URL.Path, runtime.GOOS == "windows")
+		if !ok || (only != "" && rel != "." && rel != only) {
+			http.NotFound(w, r)
+			return
 		}
-		// Hidden files (.env, .git, .ssh) are never served.
-		for _, seg := range strings.Split(rel, "/") {
-			if seg != "." && strings.HasPrefix(seg, ".") {
+		// Refuse symlinks anywhere on the path: an in-folder link could point at .env.
+		segs := strings.Split(rel, "/")
+		for i := range segs {
+			if rel == "." {
+				break
+			}
+			fi, err := root.Lstat(strings.Join(segs[:i+1], "/"))
+			if err != nil || fi.Mode()&fs.ModeSymlink != 0 {
 				http.NotFound(w, r)
 				return
 			}
-		}
-		if only != "" && rel != "." && rel != only {
-			http.NotFound(w, r)
-			return
 		}
 
 		info, err := root.Stat(rel)
@@ -52,10 +55,10 @@ func newFileServer(root *os.Root, only string) http.Handler {
 		if info.IsDir() {
 			if !strings.HasSuffix(r.URL.Path, "/") {
 				// Relative links in the listing need the trailing slash.
-				http.Redirect(w, r, clean+"/", http.StatusMovedPermanently)
+				http.Redirect(w, r, (&url.URL{Path: "/" + strings.TrimPrefix(rel, ".") + "/"}).EscapedPath(), http.StatusMovedPermanently)
 				return
 			}
-			serveListing(w, root, rel, only, clean)
+			serveListing(w, root, rel, only, path.Clean("/"+rel))
 			return
 		}
 		f, err := root.Open(rel)
@@ -90,18 +93,18 @@ func serveListing(w http.ResponseWriter, root *os.Root, rel, only, urlPath strin
 	var list []listEntry
 	for _, e := range entries {
 		name := e.Name()
-		if strings.HasPrefix(name, ".") || (only != "" && name != only) {
+		if strings.HasPrefix(name, ".") || e.Type()&fs.ModeSymlink != 0 || (only != "" && name != only) {
 			continue
 		}
 		if e.IsDir() {
-			list = append(list, listEntry{Name: name + "/", Href: url.PathEscape(name) + "/"})
+			list = append(list, listEntry{Name: name + "/", Href: "./" + url.PathEscape(name) + "/"})
 			continue
 		}
 		size := "0 B"
 		if info, err := e.Info(); err == nil {
 			size = humanSize(info.Size())
 		}
-		list = append(list, listEntry{Name: name, Href: url.PathEscape(name), Size: size})
+		list = append(list, listEntry{Name: name, Href: "./" + url.PathEscape(name), Size: size})
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	listingTmpl.Execute(w, struct {
@@ -123,4 +126,21 @@ func humanSize(n int64) string {
 		}
 	}
 	return ""
+}
+
+// safeRel turns a URL path into a root-relative name, refusing hidden segments and
+// separators os.Root would treat specially. On Windows that includes drive letters
+// and alternate streams (":") and 8.3 short names like GIT~1 ("~").
+func safeRel(urlPath string, windows bool) (string, bool) {
+	rel := strings.TrimPrefix(path.Clean("/"+urlPath), "/")
+	if rel == "" {
+		return ".", true
+	}
+	for _, seg := range strings.Split(rel, "/") {
+		if strings.HasPrefix(seg, ".") || strings.Contains(seg, "\\") ||
+			(windows && strings.ContainsAny(seg, ":~")) {
+			return "", false
+		}
+	}
+	return rel, true
 }

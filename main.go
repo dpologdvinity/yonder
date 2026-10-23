@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -51,6 +52,9 @@ func parseArgs(args []string) (options, error) {
 	}
 	if fs.NArg() == 0 {
 		return options{}, errors.New("missing port")
+	}
+	if fs.Arg(0) == "" {
+		return options{}, errors.New("empty argument")
 	}
 	if port, err := strconv.Atoi(fs.Arg(0)); err != nil {
 		o.path = fs.Arg(0)
@@ -161,9 +165,16 @@ func fileHandler(p string) (http.Handler, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
+	// Resolve links first: os.Root will not follow one out of the shared folder.
+	if abs, err = filepath.EvalSymlinks(abs); err != nil {
+		return nil, "", fmt.Errorf("no such file or folder: %s", p)
+	}
 	info, err := os.Stat(abs)
 	if err != nil {
 		return nil, "", fmt.Errorf("no such file or folder: %s", p)
+	}
+	if !info.IsDir() && strings.HasPrefix(info.Name(), ".") {
+		return nil, "", fmt.Errorf("hidden files are never shared: %s", p)
 	}
 	dir, only := abs, ""
 	if !info.IsDir() {
