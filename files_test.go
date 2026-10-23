@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -30,10 +31,12 @@ func fileFixture(t *testing.T) *os.Root {
 	write("sub/b.txt", "bee")
 	write(".env", secret)
 	write(".git/config", secret)
-	write("<script>.txt", "x")
 	write("a b&c.txt", "x")
-	write("foo:bar.txt", "colon")
-	write("a?b/inner.txt", "q")
+	if runtime.GOOS != "windows" { // Windows forbids < > : ? in names
+		write("<script>.txt", "x")
+		write("foo:bar.txt", "colon")
+		write("a?b/inner.txt", "q")
+	}
 	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte(secret), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +70,11 @@ func TestFilesListing(t *testing.T) {
 	if rec.Code != 200 || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/html") {
 		t.Fatalf("got %d %q, want 200 text/html", rec.Code, rec.Header().Get("Content-Type"))
 	}
-	for _, want := range []string{`<meta name="viewport" content="width=device-width, initial-scale=1">`, `&lt;script&gt;.txt`, `href="./a%20b&amp;c.txt"`} {
+	wants := []string{`<meta name="viewport" content="width=device-width, initial-scale=1">`, `href="./a%20b&amp;c.txt"`}
+	if runtime.GOOS != "windows" {
+		wants = append(wants, `&lt;script&gt;.txt`)
+	}
+	for _, want := range wants {
 		if !strings.Contains(body, want) {
 			t.Errorf("listing lacks %q:\n%s", want, body)
 		}
@@ -156,6 +163,9 @@ func TestFilesSymlinksRefused(t *testing.T) {
 }
 
 func TestFilesOddNames(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows forbids : and ? in file names")
+	}
 	h := newFileServer(fileFixture(t), "")
 	body := getFile(h, "/", nil).Body.String()
 	if !strings.Contains(body, `href="./foo:bar.txt"`) {
