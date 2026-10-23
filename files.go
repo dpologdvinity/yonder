@@ -24,6 +24,8 @@ var listingTmpl = template.Must(template.New("list").Parse(`<!doctype html>
 {{end}}</body></html>
 `))
 
+var crossOrigin = http.NewCrossOriginProtection()
+
 type listEntry struct{ Name, Href, Size string }
 
 // newFileServer serves files from root. With only set, just that one file is reachable.
@@ -62,6 +64,12 @@ func newFileServer(root *os.Root, only string, upload bool) http.Handler {
 			if !upload || !info.IsDir() {
 				w.Header().Set("Allow", "GET, HEAD")
 				http.Error(w, "uploads are off", http.StatusMethodNotAllowed)
+				return
+			}
+			// Blocks form posts from other sites (Origin / Sec-Fetch-Site). The cookie
+			// alone is not enough: --open has none, and other ports on this IP are same-site.
+			if err := crossOrigin.Check(r); err != nil {
+				http.Error(w, "yonder: uploads from other sites are refused", http.StatusForbidden)
 				return
 			}
 			receiveUpload(w, r, root, rel, dirURL)

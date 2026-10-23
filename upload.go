@@ -71,9 +71,25 @@ func uploadName(raw string, windows bool) (string, bool) {
 	return name, ok && rel == name
 }
 
-// saveUnique writes src to dir/name, or "name (N).ext" if taken. O_EXCL means an
-// existing file is never touched; a failed write removes the partial file.
+// saveUnique streams src into a hidden temp file (never listed or served), then
+// claims dir/name, or "name (N).ext" if taken, with O_EXCL and renames the temp
+// over that fresh empty placeholder. Existing files are never touched, and a
+// half-finished upload never shows under a real name.
 func saveUnique(root *os.Root, dir, name string, src io.Reader) error {
+	tmp := path.Join(dir, ".yonder-part-"+newToken())
+	f, err := root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(f, src)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		root.Remove(tmp)
+		return err
+	}
+
 	ext := filepath.Ext(name)
 	stem := strings.TrimSuffix(name, ext)
 	for i := 0; i < 1000; i++ {
@@ -81,22 +97,20 @@ func saveUnique(root *os.Root, dir, name string, src io.Reader) error {
 		if i > 0 {
 			n = fmt.Sprintf("%s (%d)%s", stem, i, ext)
 		}
-		p := path.Join(dir, n)
-		f, err := root.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		final := path.Join(dir, n)
+		placeholder, err := root.OpenFile(final, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 		if errors.Is(err, fs.ErrExist) {
 			continue
 		}
-		if err != nil {
-			return err
-		}
-		_, err = io.Copy(f, src)
-		if cerr := f.Close(); err == nil {
-			err = cerr
+		if err == nil {
+			placeholder.Close()
+			err = root.Rename(tmp, final)
 		}
 		if err != nil {
-			root.Remove(p)
+			root.Remove(tmp)
 		}
 		return err
 	}
+	root.Remove(tmp)
 	return errors.New("too many files with this name")
 }

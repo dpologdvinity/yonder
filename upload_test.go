@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 type part struct{ name, body string }
@@ -158,5 +160,83 @@ func TestUploadHiddenFolderRefused(t *testing.T) {
 	os.Mkdir(filepath.Join(dir, ".git"), 0o755)
 	if rec := postFiles(newFileServer(root, "", true), "/.git/", part{"x.txt", "x"}); rec.Code != 404 {
 		t.Errorf("got %d, want 404", rec.Code)
+	}
+}
+
+func TestUploadCrossOriginRefused(t *testing.T) {
+	for _, hdr := range []http.Header{
+		{"Origin": {"http://evil.example"}},
+		{"Sec-Fetch-Site": {"cross-site"}},
+	} {
+		dir, root := uploadDir(t)
+		var buf bytes.Buffer
+		mw := multipart.NewWriter(&buf)
+		fw, _ := mw.CreateFormFile("file", "x.txt")
+		fw.Write([]byte("x"))
+		mw.Close()
+		req := httptest.NewRequest("POST", "/", &buf)
+		req.Header.Set("Content-Type", mw.FormDataContentType())
+		for k, v := range hdr {
+			req.Header[k] = v
+		}
+		rec := httptest.NewRecorder()
+		newFileServer(root, "", true).ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("%v: got %d, want 403", hdr, rec.Code)
+		}
+		if _, err := os.Stat(filepath.Join(dir, "x.txt")); err == nil {
+			t.Errorf("%v: cross-origin upload was written", hdr)
+		}
+	}
+}
+
+func TestUploadLeavesNoPartFiles(t *testing.T) {
+	dir, root := uploadDir(t)
+	postFiles(newFileServer(root, "", true), "/", part{"ok.txt", "fine"})
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".yonder-part") {
+			t.Errorf("temp file %s left after success", e.Name())
+		}
+	}
+	if len(entries) != 3 {
+		t.Errorf("folder has %d entries, want 3", len(entries))
+	}
+}
+
+func TestUploadInProgressHidden(t *testing.T) {
+	dir, root := uploadDir(t)
+	pr, pw := io.Pipe()
+	mw := multipart.NewWriter(pw)
+	release := make(chan struct{})
+	go func() {
+		fw, _ := mw.CreateFormFile("file", "slow.txt")
+		fw.Write([]byte("first half"))
+		<-release
+		fw.Write([]byte(" second half"))
+		mw.Close()
+		pw.Close()
+	}()
+	req := httptest.NewRequest("POST", "/", pr)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	done := make(chan struct{})
+	go func() { newFileServer(root, "", true).ServeHTTP(httptest.NewRecorder(), req); close(done) }()
+
+	// Wait until the server has started writing something, then look.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		entries, _ := os.ReadDir(dir)
+		if len(entries) > 2 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "slow.txt")); err == nil {
+		t.Error("half-uploaded file visible under its final name")
+	}
+	close(release)
+	<-done
+	if readFile(t, filepath.Join(dir, "slow.txt")) != "first half second half" {
+		t.Error("final contents wrong")
 	}
 }
