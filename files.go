@@ -23,7 +23,7 @@ var listingTmpl = template.Must(template.New("list").Parse(`<!doctype html>
 </head><body><h1>{{.Title}}</h1>
 {{if .Upload}}<form method="post" enctype="multipart/form-data" data-max="{{.MaxUpload}}"><input type="file" name="file" multiple> <button>Upload</button></form>
 <script>document.querySelectorAll('form[data-max]').forEach(f=>f.addEventListener('submit',e=>{let t=0;for(const x of f.file.files)t+=x.size;if(t>+f.dataset.max){e.preventDefault();alert('These files are too large to upload (limit '+(f.dataset.max/2**30)+' GB per upload).')}}))</script>
-{{end}}{{if .Truncated}}<p>Showing the first {{.Cap}} items.</p>
+{{end}}{{if .Truncated}}<p>Showing {{.Cap}} items; this folder has more.</p>
 {{end}}{{range .Entries}}<a href="{{.Href}}">{{.Name}}{{if .Size}}<span>{{.Size}}</span>{{end}}</a>
 {{end}}</body></html>
 `))
@@ -123,29 +123,46 @@ func serveListing(w http.ResponseWriter, root *os.Root, rel, only, title string,
 		return
 	}
 	defer dir.Close()
-	// One more than the cap, so we know whether to say the list was cut.
-	entries, err := dir.ReadDir(maxListing + 1)
-	if err != nil && err != io.EOF {
-		http.Error(w, "cannot read folder", http.StatusInternalServerError)
-		return
-	}
-	sort.Slice(entries, func(i, j int) bool {
-		if entries[i].IsDir() != entries[j].IsDir() {
-			return entries[i].IsDir()
+	var visible []fs.DirEntry
+	switch {
+	case only != "":
+		// Single-file share: never scan the folder, it may be huge and the file might sit anywhere.
+		if fi, err := root.Lstat(only); err == nil && fi.Mode().IsRegular() {
+			visible = append(visible, fs.FileInfoToDirEntry(fi))
 		}
-		return entries[i].Name() < entries[j].Name()
+	default:
+		// Read in batches and count only entries we will show, so hidden files and links
+		// never eat the cap.
+		for len(visible) <= maxListing {
+			batch, err := dir.ReadDir(512)
+			for _, e := range batch {
+				if !strings.HasPrefix(e.Name(), ".") && e.Type()&fs.ModeSymlink == 0 {
+					visible = append(visible, e)
+				}
+			}
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				http.Error(w, "cannot read folder", http.StatusInternalServerError)
+				return
+			}
+		}
+	}
+	truncated := len(visible) > maxListing
+	if truncated {
+		visible = visible[:maxListing]
+	}
+	sort.Slice(visible, func(i, j int) bool {
+		if visible[i].IsDir() != visible[j].IsDir() {
+			return visible[i].IsDir()
+		}
+		return visible[i].Name() < visible[j].Name()
 	})
 
-	truncated := len(entries) > maxListing
-	if truncated {
-		entries = entries[:maxListing]
-	}
 	var list []listEntry
-	for _, e := range entries {
+	for _, e := range visible {
 		name := e.Name()
-		if strings.HasPrefix(name, ".") || e.Type()&fs.ModeSymlink != 0 || (only != "" && name != only) {
-			continue
-		}
 		if e.IsDir() {
 			list = append(list, listEntry{Name: name + "/", Href: "./" + url.PathEscape(name) + "/"})
 			continue

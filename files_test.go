@@ -238,7 +238,43 @@ func TestFilesListingCap(t *testing.T) {
 	root, _ := os.OpenRoot(dir)
 	defer root.Close()
 	body := getFile(newFileServer(root, "", false), "/", nil).Body.String()
-	if !strings.Contains(body, "Showing the first 3 items") || strings.Count(body, `href="./f`) != 3 {
+	if !strings.Contains(body, "this folder has more") || strings.Count(body, `href="./f`) != 3 {
 		t.Errorf("listing not capped at 3:\n%s", body)
+	}
+}
+
+func TestFilesCapCountsOnlyVisible(t *testing.T) {
+	old := maxListing
+	maxListing = 3
+	defer func() { maxListing = old }()
+	dir := t.TempDir()
+	for i := 0; i < 4; i++ {
+		os.WriteFile(filepath.Join(dir, fmt.Sprintf(".hidden%d", i)), []byte("x"), 0o644)
+	}
+	for i := 0; i < 3; i++ {
+		os.WriteFile(filepath.Join(dir, fmt.Sprintf("v%d.txt", i)), []byte("x"), 0o644)
+	}
+	root, _ := os.OpenRoot(dir)
+	defer root.Close()
+	body := getFile(newFileServer(root, "", false), "/", nil).Body.String()
+	if strings.Contains(body, "has more") || strings.Count(body, `href="./v`) != 3 {
+		t.Errorf("hidden files wrongly counted toward the cap:\n%s", body)
+	}
+}
+
+func TestFilesSingleModeListsItsFileInBigFolder(t *testing.T) {
+	old := maxListing
+	maxListing = 3
+	defer func() { maxListing = old }()
+	dir := t.TempDir()
+	for i := 0; i < 8; i++ {
+		os.WriteFile(filepath.Join(dir, fmt.Sprintf("a%d.txt", i)), []byte("x"), 0o644)
+	}
+	os.WriteFile(filepath.Join(dir, "zzz-the-one.txt"), []byte("x"), 0o644)
+	root, _ := os.OpenRoot(dir)
+	defer root.Close()
+	body := getFile(newFileServer(root, "zzz-the-one.txt", false), "/", nil).Body.String()
+	if !strings.Contains(body, `href="./zzz-the-one.txt"`) || strings.Contains(body, "has more") {
+		t.Errorf("single-file listing lost its file:\n%s", body)
 	}
 }

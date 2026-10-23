@@ -141,3 +141,27 @@ func TestAuthStripsEveryYonderCookie(t *testing.T) {
 		t.Fatalf("upstream called=%v Cookie=%q, want session=abc only", up.called, up.req.Header.Get("Cookie"))
 	}
 }
+
+func TestAuthKeepsAppCookiesNamedLikeYonder(t *testing.T) {
+	_, up := serveAuth("GET", "/", http.Header{"Cookie": {"yonder_18000=T0K; yonder_theme=dark; yonder_9=old"}})
+	if got := up.req.Header.Get("Cookie"); got != "yonder_theme=dark" {
+		t.Errorf("upstream Cookie = %q, want yonder_theme=dark (only yonder_<digits> stripped)", got)
+	}
+}
+
+func TestAuthTokenRequestsSendNoReferrer(t *testing.T) {
+	rec, _ := serveAuth("POST", "/api?yonder=T0K", nil)
+	if got := rec.Header().Get("Referrer-Policy"); got != "no-referrer" {
+		t.Errorf("Referrer-Policy = %q, want no-referrer", got)
+	}
+}
+
+func TestAuthRedirectIgnoresOpaqueTarget(t *testing.T) {
+	req := httptest.NewRequest("GET", "/?yonder=T0K", nil)
+	req.URL.Opaque = `\evil.com`
+	rec := httptest.NewRecorder()
+	withAuth(&recorder{}, "T0K", 18000).ServeHTTP(rec, req)
+	if loc := rec.Header().Get("Location"); strings.Contains(loc, "evil") || !strings.HasPrefix(loc, "/") || strings.HasPrefix(loc, "/\\") {
+		t.Errorf("Location = %q", loc)
+	}
+}

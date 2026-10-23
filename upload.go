@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"unicode"
 )
 
@@ -115,15 +116,36 @@ func saveUnique(root *os.Root, dir, name string, src io.Reader) error {
 		}
 		if err != nil {
 			root.Remove(tmp)
-			return fmt.Errorf("%w: %v", errBadName, err)
+			if isBadNameErr(err) {
+				return fmt.Errorf("%w: %w", errBadName, err)
+			}
+			return err
 		}
 		placeholder.Close()
 		if err := root.Rename(tmp, final); err != nil {
 			root.Remove(tmp)
+			root.Remove(final) // the empty placeholder we just created
 			return err
 		}
 		return nil
 	}
 	root.Remove(tmp)
 	return errors.New("too many files with this name")
+}
+
+// isBadNameErr reports errors that mean the name itself was refused, not a full disk
+// or an exhausted file table.
+func isBadNameErr(err error) bool {
+	if errors.Is(err, syscall.ENAMETOOLONG) || errors.Is(err, syscall.EINVAL) || errors.Is(err, fs.ErrInvalid) {
+		return true
+	}
+	if runtime.GOOS == "windows" {
+		// ERROR_INVALID_NAME, ERROR_BAD_PATHNAME, ERROR_FILENAME_EXCED_RANGE
+		for _, code := range []syscall.Errno{123, 161, 206} {
+			if errors.Is(err, code) {
+				return true
+			}
+		}
+	}
+	return false
 }
