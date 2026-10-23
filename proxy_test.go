@@ -316,3 +316,12 @@ func TestConnLoggerFirstConnectionPerDevice(t *testing.T) {
 		t.Errorf("log = %q, want %q", log.String(), want)
 	}
 }
+
+func TestWithLogHidesToken(t *testing.T) {
+	var log strings.Builder
+	h := withLog(http.NotFoundHandler(), &log, time.Now)
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/a?x=1&yonder=SECRET&y=2", nil))
+	if strings.Contains(log.String(), "SECRET") || !strings.Contains(log.String(), "/a?x=1&yonder=…&y=2") {
+		t.Errorf("log = %q, want the token replaced by …", log.String())
+	}
+}

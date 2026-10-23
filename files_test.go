@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -200,5 +201,44 @@ func TestSafeRel(t *testing.T) {
 		if got != tt.want || ok != tt.ok {
 			t.Errorf("safeRel(%q, %v) = %q, %v; want %q, %v", tt.path, tt.windows, got, ok, tt.want, tt.ok)
 		}
+	}
+}
+
+func TestFilesSingleModeRefusesUpload(t *testing.T) {
+	dir, root := uploadDir(t)
+	rec := postFiles(newFileServer(root, "index.txt", true), "/", part{"x.txt", "x"})
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("got %d, want 405", rec.Code)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "x.txt")); err == nil {
+		t.Error("single-file share accepted an upload")
+	}
+}
+
+func TestFilesTitleIsFolderName(t *testing.T) {
+	root := fileFixture(t)
+	h := newFileServer(root, "", false)
+	want := filepath.Base(root.Name())
+	if body := getFile(h, "/", nil).Body.String(); !strings.Contains(body, "<title>"+want+"</title>") || !strings.Contains(body, "<h1>"+want+"</h1>") {
+		t.Errorf("root listing title not %q:\n%s", want, body)
+	}
+	if body := getFile(h, "/sub/", nil).Body.String(); !strings.Contains(body, "<title>sub</title>") {
+		t.Errorf("subfolder title not sub:\n%s", body)
+	}
+}
+
+func TestFilesListingCap(t *testing.T) {
+	old := maxListing
+	maxListing = 3
+	defer func() { maxListing = old }()
+	dir := t.TempDir()
+	for i := 0; i < 5; i++ {
+		os.WriteFile(filepath.Join(dir, fmt.Sprintf("f%d.txt", i)), []byte("x"), 0o644)
+	}
+	root, _ := os.OpenRoot(dir)
+	defer root.Close()
+	body := getFile(newFileServer(root, "", false), "/", nil).Body.String()
+	if !strings.Contains(body, "Showing the first 3 items") || strings.Count(body, `href="./f`) != 3 {
+		t.Errorf("listing not capped at 3:\n%s", body)
 	}
 }

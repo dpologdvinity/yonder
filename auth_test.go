@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -121,5 +122,22 @@ func TestAuthKeepsRawAppCookies(t *testing.T) {
 	_, up := serveAuth("GET", "/", http.Header{"Cookie": {`yonder_18000=T0K; j={"a":1}; q="v"; u=café; e=`}})
 	if want := `j={"a":1}; q="v"; u=café; e=`; !up.called || up.req.Header.Get("Cookie") != want {
 		t.Fatalf("upstream Cookie = %q, want %q", up.req.Header.Get("Cookie"), want)
+	}
+}
+
+func TestAuthRedirectStaysOnSite(t *testing.T) {
+	for _, target := range []string{"//evil.com/?yonder=T0K", "///evil.com/x?yonder=T0K"} {
+		rec, _ := serveAuth("GET", target, nil)
+		loc := rec.Header().Get("Location")
+		if strings.HasPrefix(loc, "//") || !strings.HasPrefix(loc, "/") {
+			t.Errorf("%s: Location %q can leave the site", target, loc)
+		}
+	}
+}
+
+func TestAuthStripsEveryYonderCookie(t *testing.T) {
+	_, up := serveAuth("GET", "/", http.Header{"Cookie": {"yonder_13000=OTHER; yonder_18000=T0K; session=abc"}})
+	if !up.called || up.req.Header.Get("Cookie") != "session=abc" {
+		t.Fatalf("upstream called=%v Cookie=%q, want session=abc only", up.called, up.req.Header.Get("Cookie"))
 	}
 }

@@ -96,7 +96,9 @@ func withLog(h http.Handler, w io.Writer, now func() time.Time) http.Handler {
 			if err != nil {
 				ip = r.RemoteAddr
 			}
-			fmt.Fprintf(w, "%s  %s %s  %d  %s\n", start.Format("15:04:05"), r.Method, r.URL.RequestURI(), rec.status, ip)
+			u := *r.URL
+			u.RawQuery = redactParam(u.RawQuery, tokenParam) // the share token must not reach the terminal log
+			fmt.Fprintf(w, "%s  %s %s  %d  %s\n", start.Format("15:04:05"), r.Method, u.RequestURI(), rec.status, ip)
 		}()
 		h.ServeHTTP(rec, r)
 	})

@@ -42,14 +42,15 @@ func withAuth(h http.Handler, token string, listenPort int) http.Handler {
 		out := r.Clone(r.Context())
 		out.URL.RawQuery = dropParam(r.URL.RawQuery, tokenParam)
 		out.Header.Del("Cookie")
-		if rest := dropCookie(r.Header.Values("Cookie"), cookieName); rest != "" {
+		if rest := dropCookie(r.Header.Values("Cookie"), "yonder_"); rest != "" {
 			out.Header.Set("Cookie", rest)
 		}
 
 		if viaQuery {
 			http.SetCookie(w, &http.Cookie{Name: cookieName, Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode})
 			if r.Method == http.MethodGet || r.Method == http.MethodHead {
-				http.Redirect(w, r, out.URL.RequestURI(), http.StatusFound)
+				// One leading slash only: "//host" would be an open redirect.
+				http.Redirect(w, r, "/"+strings.TrimLeft(out.URL.RequestURI(), "/"), http.StatusFound)
 				return
 			}
 		}
@@ -70,18 +71,31 @@ func dropParam(rawQuery, name string) string {
 	return strings.Join(kept, "&")
 }
 
-// dropCookie removes the named cookie from raw Cookie header values, keeping every
-// other pair byte for byte. r.Cookies() would drop values with quotes or UTF-8.
-func dropCookie(headers []string, name string) string {
+// dropCookie removes cookies whose name starts with prefix (every yonder instance's
+// cookie, not only this one's) from raw Cookie header values, keeping every other pair
+// byte for byte. r.Cookies() would drop values with quotes or UTF-8.
+func dropCookie(headers []string, prefix string) string {
 	var kept []string
 	for _, h := range headers {
 		for _, part := range strings.Split(h, ";") {
 			part = strings.TrimSpace(part)
-			if k, _, _ := strings.Cut(part, "="); part == "" || strings.TrimSpace(k) == name {
+			if k, _, _ := strings.Cut(part, "="); part == "" || strings.HasPrefix(strings.TrimSpace(k), prefix) {
 				continue
 			}
 			kept = append(kept, part)
 		}
 	}
 	return strings.Join(kept, "; ")
+}
+
+// redactParam replaces the value of every name=value pair called name with "…", for logs.
+func redactParam(rawQuery, name string) string {
+	parts := strings.Split(rawQuery, "&")
+	for i, part := range parts {
+		key, _, found := strings.Cut(part, "=")
+		if k, err := url.QueryUnescape(key); found && err == nil && k == name {
+			parts[i] = key + "=…"
+		}
+	}
+	return strings.Join(parts, "&")
 }

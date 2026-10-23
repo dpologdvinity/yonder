@@ -240,3 +240,42 @@ func TestUploadInProgressHidden(t *testing.T) {
 		t.Error("final contents wrong")
 	}
 }
+
+func TestUploadBadNamesAre400(t *testing.T) {
+	long := strings.Repeat("a", 300) + ".txt"
+	dir, root := uploadDir(t)
+	rec := postFiles(newFileServer(root, "", true), "/", part{long, "x"})
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("long name: got %d, want 400", rec.Code)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 2 {
+		t.Errorf("folder has %d entries, want 2 (no temp file left)", len(entries))
+	}
+}
+
+func TestUploadNameRejectsInvisibleText(t *testing.T) {
+	for _, name := range []string{"cod‮gpj.exe", "a\nb.txt", "x‏.txt", "t⁦.txt"} {
+		if _, ok := uploadName(name, false); ok {
+			t.Errorf("uploadName(%q) accepted", name)
+		}
+	}
+	if _, ok := uploadName("café 日本語.txt", false); !ok {
+		t.Error("ordinary unicode name refused")
+	}
+}
+
+func TestUploadWrongTargetMessage(t *testing.T) {
+	_, root := uploadDir(t)
+	rec := postFiles(newFileServer(root, "", true), "/index.txt", part{"x.txt", "x"})
+	if rec.Code != http.StatusMethodNotAllowed || !strings.Contains(rec.Body.String(), "uploads go to a folder") {
+		t.Errorf("got %d %q, want 405 'uploads go to a folder'", rec.Code, rec.Body.String())
+	}
+}
+
+func TestListingShowsUploadLimit(t *testing.T) {
+	_, root := uploadDir(t)
+	body := getFile(newFileServer(root, "", true), "/", nil).Body.String()
+	if !strings.Contains(body, `data-max="4294967296"`) || !strings.Contains(body, "too large") {
+		t.Errorf("listing lacks the client-side size check:\n%s", body)
+	}
+}

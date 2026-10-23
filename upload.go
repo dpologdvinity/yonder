@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"unicode"
 )
 
 // maxUpload caps one upload request. A var so tests can lower it.
@@ -51,7 +52,14 @@ func receiveUpload(w http.ResponseWriter, r *http.Request, root *os.Root, dir, b
 	http.Redirect(w, r, back, http.StatusSeeOther)
 }
 
+// errBadName marks a name the filesystem refused (too long, reserved on Windows).
+var errBadName = errors.New("refused file name")
+
 func uploadError(w http.ResponseWriter, err error) {
+	if errors.Is(err, errBadName) {
+		http.Error(w, "yonder: the file name was refused", http.StatusBadRequest)
+		return
+	}
 	var tooBig *http.MaxBytesError
 	if errors.As(err, &tooBig) {
 		http.Error(w, "yonder: upload too large", http.StatusRequestEntityTooLarge)
@@ -64,8 +72,11 @@ func uploadError(w http.ResponseWriter, err error) {
 // same rules as download paths, so nothing hidden or path-like is written.
 func uploadName(raw string, windows bool) (string, bool) {
 	name := raw[strings.LastIndexAny(raw, `/\`)+1:]
-	if strings.ContainsRune(name, 0) {
-		return "", false
+	for _, r := range name {
+		// Control and bidi characters can disguise a name ("gpj.exe" shown as "exe.jpg").
+		if unicode.IsControl(r) || unicode.Is(unicode.Bidi_Control, r) {
+			return "", false
+		}
 	}
 	rel, ok := safeRel("/"+name, windows)
 	return name, ok && rel == name
@@ -102,14 +113,16 @@ func saveUnique(root *os.Root, dir, name string, src io.Reader) error {
 		if errors.Is(err, fs.ErrExist) {
 			continue
 		}
-		if err == nil {
-			placeholder.Close()
-			err = root.Rename(tmp, final)
-		}
 		if err != nil {
 			root.Remove(tmp)
+			return fmt.Errorf("%w: %v", errBadName, err)
 		}
-		return err
+		placeholder.Close()
+		if err := root.Rename(tmp, final); err != nil {
+			root.Remove(tmp)
+			return err
+		}
+		return nil
 	}
 	root.Remove(tmp)
 	return errors.New("too many files with this name")
