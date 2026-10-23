@@ -41,15 +41,9 @@ func withAuth(h http.Handler, token string, listenPort int) http.Handler {
 		// Never pass yonder's own parameter or cookie on to the app.
 		out := r.Clone(r.Context())
 		out.URL.RawQuery = dropParam(r.URL.RawQuery, tokenParam)
-		var kept []string
-		for _, ck := range r.Cookies() {
-			if ck.Name != cookieName {
-				kept = append(kept, ck.Name+"="+ck.Value)
-			}
-		}
 		out.Header.Del("Cookie")
-		if len(kept) > 0 {
-			out.Header.Set("Cookie", strings.Join(kept, "; "))
+		if rest := dropCookie(r.Header.Values("Cookie"), cookieName); rest != "" {
+			out.Header.Set("Cookie", rest)
 		}
 
 		if viaQuery {
@@ -74,4 +68,20 @@ func dropParam(rawQuery, name string) string {
 		kept = append(kept, part)
 	}
 	return strings.Join(kept, "&")
+}
+
+// dropCookie removes the named cookie from raw Cookie header values, keeping every
+// other pair byte for byte. r.Cookies() would drop values with quotes or UTF-8.
+func dropCookie(headers []string, name string) string {
+	var kept []string
+	for _, h := range headers {
+		for _, part := range strings.Split(h, ";") {
+			part = strings.TrimSpace(part)
+			if k, _, _ := strings.Cut(part, "="); part == "" || strings.TrimSpace(k) == name {
+				continue
+			}
+			kept = append(kept, part)
+		}
+	}
+	return strings.Join(kept, "; ")
 }

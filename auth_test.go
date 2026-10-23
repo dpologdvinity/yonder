@@ -116,3 +116,10 @@ func TestAuthUpgradeWithoutCookie(t *testing.T) {
 	rec, up := serveAuth("GET", "/", http.Header{"Connection": {"Upgrade"}, "Upgrade": {"websocket"}})
 	assertForbidden(t, rec, up)
 }
+
+func TestAuthKeepsRawAppCookies(t *testing.T) {
+	_, up := serveAuth("GET", "/", http.Header{"Cookie": {`yonder_18000=T0K; j={"a":1}; q="v"; u=café; e=`}})
+	if want := `j={"a":1}; q="v"; u=café; e=`; !up.called || up.req.Header.Get("Cookie") != want {
+		t.Fatalf("upstream Cookie = %q, want %q", up.req.Header.Get("Cookie"), want)
+	}
+}
