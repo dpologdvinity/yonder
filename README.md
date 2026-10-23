@@ -8,12 +8,49 @@ Open the site running on your `localhost` from your phone, your iPad, or a frien
 
 ## Install
 
+**macOS / Linux, any distro**
 ```sh
-brew install dpologdvinity/tap/yonder     # macOS and Linux
+curl -fsSL https://raw.githubusercontent.com/dpologdvinity/yonder/master/install.sh | sh
+```
+
+**Homebrew** (macOS and Linux)
+```sh
+brew install dpologdvinity/tap/yonder
+```
+
+**Debian / Ubuntu** (apt)
+```sh
+sudo curl -fsSLo /usr/share/keyrings/yonder.gpg https://dpologdvinity.github.io/packages/yonder.gpg
+echo "deb [signed-by=/usr/share/keyrings/yonder.gpg] https://dpologdvinity.github.io/packages/apt ./" | sudo tee /etc/apt/sources.list.d/yonder.list
+sudo apt update && sudo apt install yonder
+```
+
+**Fedora / RHEL** (dnf)
+```sh
+sudo curl -fsSLo /etc/yum.repos.d/yonder.repo https://dpologdvinity.github.io/packages/yonder.repo
+sudo dnf install yonder
+```
+
+**Arch Linux** (pacman)
+```sh
+curl -fsSL https://dpologdvinity.github.io/packages/yonder.asc | sudo pacman-key --add -
+sudo pacman-key --lsign-key 282804EB5779EA7EFFCF8308097AF7F74B2F93E5
+printf '\n[yonder]\nServer = https://dpologdvinity.github.io/packages/arch/$arch\n' | sudo tee -a /etc/pacman.conf
+sudo pacman -Sy yonder
+```
+
+**Windows** (Scoop)
+```powershell
+scoop bucket add yonder https://github.com/dpologdvinity/scoop-bucket
+scoop install yonder
+```
+
+**Go**
+```sh
 go install github.com/dpologdvinity/yonder@latest
 ```
 
-Or download a binary for Linux, macOS or Windows from [Releases](https://github.com/dpologdvinity/yonder/releases).
+Or download a binary, `.deb`, `.rpm` or Arch package from [Releases](https://github.com/dpologdvinity/yonder/releases).
 
 ## Usage
 
