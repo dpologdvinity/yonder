@@ -93,6 +93,8 @@ func TestProxyLocationRewrite(t *testing.T) {
 		{fmt.Sprintf("http://localhost:%d/a?x=1", port), "http://" + clientHost + "/a?x=1"},
 		{fmt.Sprintf("http://127.0.0.1:%d/a", port), "http://" + clientHost + "/a"},
 		{fmt.Sprintf("http://[::1]:%d/a", port), "http://" + clientHost + "/a"},
+		{fmt.Sprintf("http://LOCALHOST:%d/a", port), "http://" + clientHost + "/a"},
+		{fmt.Sprintf("//localhost:%d/a", port), "http://" + clientHost + "/a"},
 		{"https://github.com/login", "https://github.com/login"},
 		{"/dash", "/dash"},
 	}
@@ -201,6 +203,16 @@ func TestProxyUpstreamRestart(t *testing.T) {
 	fr := httptest.NewServer(newProxy(addr.String(), addr.Port))
 	defer fr.Close()
 
+	// Warm a keep-alive connection to the first upstream, then take it down.
+	first := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	first.Listener.Close()
+	first.Listener, _ = net.Listen("tcp", addr.String())
+	first.Start()
+	if resp := do(t, "GET", fr.URL, nil); resp.StatusCode != 200 {
+		t.Fatalf("warm-up: got %d, want 200", resp.StatusCode)
+	}
+	first.Close()
+
 	resp := do(t, "GET", fr.URL, nil)
 	body, _ := io.ReadAll(resp.Body)
 	if want := fmt.Sprintf("yonder: localhost:%d is not responding\n", addr.Port); resp.StatusCode != 502 || string(body) != want {
@@ -259,5 +271,22 @@ func TestWithLogUpgradeStatus(t *testing.T) {
 			t.Fatalf("log = %q, want a 101 line", log.String())
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestWithLogAbortedHandlerStillLogs(t *testing.T) {
+	var log strings.Builder
+	times := []time.Time{time.Date(2026, 1, 1, 10, 0, 0, 0, time.Local), time.Date(2026, 1, 1, 11, 0, 0, 0, time.Local)}
+	i := 0
+	now := func() time.Time { t := times[i]; i++; return t }
+	h := withLog(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { panic(http.ErrAbortHandler) }), &log, now)
+
+	func() {
+		defer func() { recover() }()
+		req := httptest.NewRequest("GET", "/stream", nil)
+		h.ServeHTTP(httptest.NewRecorder(), req)
+	}()
+	if want := "10:00:00  GET /stream  200  192.0.2.1\n"; log.String() != want {
+		t.Errorf("log = %q, want %q (start time, written despite abort)", log.String(), want)
 	}
 }

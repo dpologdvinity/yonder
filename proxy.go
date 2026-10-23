@@ -52,10 +52,10 @@ func rewriteLocation(h http.Header, port int, client string) {
 		return
 	}
 	u, err := url.Parse(loc)
-	if err != nil || !u.IsAbs() {
+	if err != nil || u.Host == "" { // relative paths have no host; //host is scheme-relative
 		return
 	}
-	switch u.Host {
+	switch strings.ToLower(u.Host) {
 	case fmt.Sprintf("localhost:%d", port), fmt.Sprintf("127.0.0.1:%d", port), fmt.Sprintf("[::1]:%d", port):
 		u.Scheme, u.Host = "http", client
 		h.Set("Location", u.String())
@@ -84,16 +84,20 @@ func stripLocalhostCookieDomain(h http.Header) {
 // withLog writes one line per request: time, method, path, status, client IP.
 func withLog(h http.Handler, w io.Writer, now func() time.Time) http.Handler {
 	return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		start := now()
 		rec := &statusRecorder{ResponseWriter: rw}
+		// Deferred so a stream aborted with http.ErrAbortHandler still logs.
+		defer func() {
+			if rec.status == 0 {
+				rec.status = http.StatusOK
+			}
+			ip, _, err := net.SplitHostPort(r.RemoteAddr)
+			if err != nil {
+				ip = r.RemoteAddr
+			}
+			fmt.Fprintf(w, "%s  %s %s  %d  %s\n", start.Format("15:04:05"), r.Method, r.URL.RequestURI(), rec.status, ip)
+		}()
 		h.ServeHTTP(rec, r)
-		if rec.status == 0 {
-			rec.status = http.StatusOK
-		}
-		ip, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err != nil {
-			ip = r.RemoteAddr
-		}
-		fmt.Fprintf(w, "%s  %s %s  %d  %s\n", now().Format("15:04:05"), r.Method, r.URL.RequestURI(), rec.status, ip)
 	})
 }
 
