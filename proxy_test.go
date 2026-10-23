@@ -290,3 +290,29 @@ func TestWithLogAbortedHandlerStillLogs(t *testing.T) {
 		t.Errorf("log = %q, want %q (start time, written despite abort)", log.String(), want)
 	}
 }
+
+type fakeConn struct {
+	net.Conn
+	addr net.Addr
+}
+
+func (f fakeConn) RemoteAddr() net.Addr { return f.addr }
+
+func TestConnLoggerFirstConnectionPerDevice(t *testing.T) {
+	var log strings.Builder
+	now := func() time.Time { return time.Date(2026, 10, 23, 2, 41, 53, 0, time.Local) }
+	onState := newConnLogger(&log, now)
+	conn := func(ip string) net.Conn {
+		return fakeConn{addr: &net.TCPAddr{IP: net.ParseIP(ip), Port: 50000}}
+	}
+
+	onState(conn("172.20.10.3"), http.StateNew)
+	onState(conn("172.20.10.3"), http.StateNew)    // same device again: silent
+	onState(conn("172.20.10.3"), http.StateActive) // not a new connection: silent
+	onState(conn("172.20.10.4"), http.StateNew)
+
+	want := "02:41:53  device connected  172.20.10.3\n02:41:53  device connected  172.20.10.4\n"
+	if log.String() != want {
+		t.Errorf("log = %q, want %q", log.String(), want)
+	}
+}

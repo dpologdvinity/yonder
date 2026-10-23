@@ -10,6 +10,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -130,3 +131,26 @@ func (s *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 
 // Unwrap lets http.ResponseController reach Flush on the real writer (SSE).
 func (s *statusRecorder) Unwrap() http.ResponseWriter { return s.ResponseWriter }
+
+// newConnLogger prints one line the first time each client IP opens a connection,
+// so a stalled request is still visible: the device reached yonder, even if nothing came back.
+func newConnLogger(w io.Writer, now func() time.Time) func(net.Conn, http.ConnState) {
+	var mu sync.Mutex
+	seen := map[string]bool{}
+	return func(c net.Conn, s http.ConnState) {
+		if s != http.StateNew {
+			return
+		}
+		ip, _, err := net.SplitHostPort(c.RemoteAddr().String())
+		if err != nil {
+			ip = c.RemoteAddr().String()
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if seen[ip] {
+			return
+		}
+		seen[ip] = true
+		fmt.Fprintf(w, "%s  device connected  %s\n", now().Format("15:04:05"), ip)
+	}
+}

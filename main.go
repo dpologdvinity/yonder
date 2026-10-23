@@ -111,7 +111,7 @@ func run(args []string, stdout, stderr io.Writer, ctx context.Context) int {
 	fmt.Fprintln(stdout)
 
 	// No write timeout: SSE and WebSockets are long-lived. The header timeout stops slowloris.
-	srv := &http.Server{Handler: withLog(newProxy(target, port), stdout, time.Now), ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Handler: withLog(newProxy(target, port), stdout, time.Now), ReadHeaderTimeout: 10 * time.Second, ConnState: newConnLogger(stdout, time.Now)}
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(ln) }()
 	select {
