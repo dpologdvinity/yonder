@@ -1,0 +1,126 @@
+package main
+
+import (
+	"fmt"
+	"html/template"
+	"net/http"
+	"net/url"
+	"os"
+	"path"
+	"sort"
+	"strings"
+)
+
+var listingTmpl = template.Must(template.New("list").Parse(`<!doctype html>
+<html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}}</title>
+<style>body{font:16px system-ui,sans-serif;margin:1rem}a{display:block;padding:.6rem 0;border-bottom:1px solid #ddd;text-decoration:none}span{float:right;color:#777}</style>
+</head><body><h1>{{.Title}}</h1>
+{{range .Entries}}<a href="{{.Href}}">{{.Name}}{{if .Size}}<span>{{.Size}}</span>{{end}}</a>
+{{end}}</body></html>
+`))
+
+type listEntry struct{ Name, Href, Size string }
+
+// newFileServer serves files from root. With only set, just that one file is reachable.
+// All access goes through os.Root, so ".." and symlinks cannot leave the shared folder.
+func newFileServer(root *os.Root, only string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		clean := path.Clean("/" + r.URL.Path)
+		rel := strings.TrimPrefix(clean, "/")
+		if rel == "" {
+			rel = "."
+		}
+		// Hidden files (.env, .git, .ssh) are never served.
+		for _, seg := range strings.Split(rel, "/") {
+			if seg != "." && strings.HasPrefix(seg, ".") {
+				http.NotFound(w, r)
+				return
+			}
+		}
+		if only != "" && rel != "." && rel != only {
+			http.NotFound(w, r)
+			return
+		}
+
+		info, err := root.Stat(rel)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		if info.IsDir() {
+			if !strings.HasSuffix(r.URL.Path, "/") {
+				// Relative links in the listing need the trailing slash.
+				http.Redirect(w, r, clean+"/", http.StatusMovedPermanently)
+				return
+			}
+			serveListing(w, root, rel, only, clean)
+			return
+		}
+		f, err := root.Open(rel)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		defer f.Close()
+		http.ServeContent(w, r, info.Name(), info.ModTime(), f)
+	})
+}
+
+func serveListing(w http.ResponseWriter, root *os.Root, rel, only, urlPath string) {
+	dir, err := root.Open(rel)
+	if err != nil {
+		http.Error(w, "cannot read folder", http.StatusInternalServerError)
+		return
+	}
+	defer dir.Close()
+	entries, err := dir.ReadDir(-1)
+	if err != nil {
+		http.Error(w, "cannot read folder", http.StatusInternalServerError)
+		return
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].IsDir() != entries[j].IsDir() {
+			return entries[i].IsDir()
+		}
+		return entries[i].Name() < entries[j].Name()
+	})
+
+	var list []listEntry
+	for _, e := range entries {
+		name := e.Name()
+		if strings.HasPrefix(name, ".") || (only != "" && name != only) {
+			continue
+		}
+		if e.IsDir() {
+			list = append(list, listEntry{Name: name + "/", Href: url.PathEscape(name) + "/"})
+			continue
+		}
+		size := "0 B"
+		if info, err := e.Info(); err == nil {
+			size = humanSize(info.Size())
+		}
+		list = append(list, listEntry{Name: name, Href: url.PathEscape(name), Size: size})
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	listingTmpl.Execute(w, struct {
+		Title   string
+		Entries []listEntry
+	}{urlPath, list})
+}
+
+// humanSize formats bytes with a 1024 base: 0 B, 999 B, 1.0 KB, 1.5 MB.
+func humanSize(n int64) string {
+	if n < 1024 {
+		return fmt.Sprintf("%d B", n)
+	}
+	f, units := float64(n), []string{"KB", "MB", "GB", "TB"}
+	for i := range units {
+		f /= 1024
+		if f < 1024 || i == len(units)-1 {
+			return fmt.Sprintf("%.1f %s", f, units[i])
+		}
+	}
+	return ""
+}
