@@ -1,3 +1,6 @@
 /yonder
 /yonder.exe
 /dist/
+npm/bin/yonder
+npm/bin/yonder.exe
+npm/*.tgz

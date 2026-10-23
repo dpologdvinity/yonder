@@ -29,5 +29,5 @@ nfpms:
     maintainer: Kaitlyn Bassford <dpologdvinity@users.noreply.github.com>
     description: "your site, over yonder: share a localhost site or files with your phone via a QR code"
     license: MIT
-    formats: [deb, rpm]
+    formats: [deb, rpm, archlinux]
     bindir: /usr/bin
