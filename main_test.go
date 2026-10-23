@@ -24,6 +24,7 @@ func TestParseArgs(t *testing.T) {
 		{[]string{"./docs"}, options{path: "./docs"}},
 		{[]string{"notes.pdf", "--open"}, options{path: "notes.pdf", open: true}},
 		{[]string{"abc"}, options{path: "abc"}},
+		{[]string{"./docs", "--upload"}, options{path: "./docs", upload: true}},
 		{[]string{"--version"}, options{showVersion: true}},
 		{[]string{"3000", "--version"}, options{showVersion: true}},
 	}
@@ -34,7 +35,7 @@ func TestParseArgs(t *testing.T) {
 		}
 	}
 
-	bad := [][]string{{}, {""}, {"0"}, {"70000"}, {"-1"}, {"3000", "4000"}, {"3000", "--listen", "x"}, {"3000", "--listen", "70000"}, {"3000", "--nope"}}
+	bad := [][]string{{}, {""}, {"3000", "--upload"}, {"0"}, {"70000"}, {"-1"}, {"3000", "4000"}, {"3000", "--listen", "x"}, {"3000", "--listen", "70000"}, {"3000", "--nope"}}
 	for _, args := range bad {
 		if _, err := parseArgs(args); err == nil {
 			t.Errorf("parseArgs(%q): want error, got nil", args)
@@ -75,7 +76,7 @@ func TestRunHelpExitsZero(t *testing.T) {
 		if code := run([]string{flagName}, &out, &errOut, context.Background()); code != 0 {
 			t.Errorf("%s: exit code = %d, want 0", flagName, code)
 		}
-		if !strings.HasPrefix(out.String(), "usage: yonder <port|path> [--listen N] [--open]") || errOut.Len() != 0 {
+		if !strings.HasPrefix(out.String(), "usage: yonder <port|path> [--listen N] [--open] [--upload]") || errOut.Len() != 0 {
 			t.Errorf("%s: stdout = %q, stderr = %q; want usage on stdout only", flagName, out.String(), errOut.String())
 		}
 	}
@@ -98,7 +99,7 @@ func TestFileHandlerSymlinkArg(t *testing.T) {
 	if err := os.Symlink(real, link); err != nil {
 		t.Skip("symlinks not supported")
 	}
-	h, _, closeRoot, err := fileHandler(link)
+	h, _, closeRoot, err := fileHandler(link, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +114,15 @@ func TestFileHandlerSymlinkArg(t *testing.T) {
 func TestFileHandlerRejectsDotfile(t *testing.T) {
 	p := filepath.Join(t.TempDir(), ".bashrc")
 	os.WriteFile(p, []byte("x"), 0o644)
-	if _, _, _, err := fileHandler(p); err == nil || err.Error() != "hidden files are never shared: "+p {
+	if _, _, _, err := fileHandler(p, false); err == nil || err.Error() != "hidden files are never shared: "+p {
 		t.Errorf("err = %v, want hidden-file error", err)
+	}
+}
+
+func TestFileHandlerUploadNeedsFolder(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "a.txt")
+	os.WriteFile(p, []byte("x"), 0o644)
+	if _, _, _, err := fileHandler(p, true); err == nil || err.Error() != "--upload needs a folder" {
+		t.Errorf("err = %v, want --upload needs a folder", err)
 	}
 }

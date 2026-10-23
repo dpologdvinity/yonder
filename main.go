@@ -21,12 +21,13 @@ import (
 
 var version = "dev"
 
-const usage = "usage: yonder <port|path> [--listen N] [--open]\n       yonder --version\n"
+const usage = "usage: yonder <port|path> [--listen N] [--open] [--upload]\n       yonder --version\n"
 
 type options struct {
 	port, listenPort  int
 	path              string // set instead of port when sharing files
 	open, showVersion bool
+	upload            bool // accept files from other devices (folders only)
 }
 
 func main() {
@@ -43,6 +44,7 @@ func parseArgs(args []string) (options, error) {
 	fs.SetOutput(io.Discard)
 	fs.IntVar(&o.listenPort, "listen", 0, "")
 	fs.BoolVar(&o.open, "open", false, "")
+	fs.BoolVar(&o.upload, "upload", false, "")
 	fs.BoolVar(&o.showVersion, "version", false, "")
 	if err := fs.Parse(args); err != nil {
 		return options{}, err
@@ -71,6 +73,9 @@ func parseArgs(args []string) (options, error) {
 	}
 	if fs.NArg() > 0 {
 		return options{}, fmt.Errorf("unexpected argument %q", fs.Arg(0))
+	}
+	if o.upload && o.path == "" {
+		return options{}, errors.New("--upload needs a folder")
 	}
 	if o.listenPort < 0 || o.listenPort > 65535 {
 		return options{}, fmt.Errorf("invalid --listen port %d", o.listenPort)
@@ -101,7 +106,7 @@ func run(args []string, stdout, stderr io.Writer, ctx context.Context) int {
 	var what string
 	port := opts.port
 	if opts.path != "" {
-		h, abs, closeRoot, err := fileHandler(opts.path)
+		h, abs, closeRoot, err := fileHandler(opts.path, opts.upload)
 		if err != nil {
 			return fail(err)
 		}
@@ -141,6 +146,9 @@ func run(args []string, stdout, stderr io.Writer, ctx context.Context) int {
 		fmt.Fprintf(stdout, "  also: http://%s:%d%s\n", a, actual, suffix)
 	}
 	fmt.Fprintln(stdout, "\n"+warning)
+	if opts.upload {
+		fmt.Fprintf(stdout, "Uploads are on: files sent from other devices land in %s.\n", what)
+	}
 	if hint := detectWSLHint(); hint != "" {
 		fmt.Fprint(stdout, "\n"+hint)
 	}
@@ -162,7 +170,7 @@ func run(args []string, stdout, stderr io.Writer, ctx context.Context) int {
 
 // fileHandler opens path for sharing: a folder is served whole, a file alone.
 // The caller must call closeRoot when done.
-func fileHandler(p string) (h http.Handler, abs string, closeRoot func() error, err error) {
+func fileHandler(p string, upload bool) (h http.Handler, abs string, closeRoot func() error, err error) {
 	abs, err = filepath.Abs(p)
 	if err != nil {
 		return nil, "", nil, err
@@ -178,6 +186,9 @@ func fileHandler(p string) (h http.Handler, abs string, closeRoot func() error, 
 	if !info.IsDir() && strings.HasPrefix(info.Name(), ".") {
 		return nil, "", nil, fmt.Errorf("hidden files are never shared: %s", p)
 	}
+	if upload && !info.IsDir() {
+		return nil, "", nil, errors.New("--upload needs a folder")
+	}
 	dir, only := abs, ""
 	if !info.IsDir() {
 		dir, only = filepath.Dir(abs), filepath.Base(abs)
@@ -186,5 +197,5 @@ func fileHandler(p string) (h http.Handler, abs string, closeRoot func() error, 
 	if err != nil {
 		return nil, "", nil, err
 	}
-	return newFileServer(root, only), abs, root.Close, nil
+	return newFileServer(root, only, upload), abs, root.Close, nil
 }

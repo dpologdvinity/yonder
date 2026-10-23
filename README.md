@@ -20,6 +20,7 @@ Or download a binary for Linux, macOS or Windows from [Releases](https://github.
 ```
 yonder <port>             share localhost:<port> on the LAN
 yonder <path>             share a file or folder
+yonder <folder> --upload  also let other devices send files into the folder
 yonder <port> --listen N  use proxy port N
 yonder <port> --open      share without the access token
 yonder --version
@@ -56,7 +57,7 @@ Same QR code and token as port sharing. The default port is 18000.
 - Hidden files and folders (`.env`, `.git`, `.ssh`, anything starting with `.`) are never listed or served.
 - Symlinks inside the shared folder are skipped, and `..` can't reach outside it.
 - Share a dedicated folder, not your home directory.
-- Download only for now; sending files from the phone to the laptop is planned.
+- Add `--upload` to let the other device send files into the folder: the page gets an Upload button (on a phone it opens the photo picker or Files). Existing files are never overwritten (`photo (1).jpg`), hidden or path-like names are refused, and one upload is capped at 4 GB. Uploads are off unless you pass the flag.
 - A folder named like a number is a port to yonder: use `yonder ./3000`.
 
 ## Is it safe?

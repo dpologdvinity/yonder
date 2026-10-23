@@ -65,7 +65,7 @@ func getFile(h http.Handler, target string, hdr http.Header) *httptest.ResponseR
 }
 
 func TestFilesListing(t *testing.T) {
-	rec := getFile(newFileServer(fileFixture(t), ""), "/", nil)
+	rec := getFile(newFileServer(fileFixture(t), "", false), "/", nil)
 	body := rec.Body.String()
 	if rec.Code != 200 || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/html") {
 		t.Fatalf("got %d %q, want 200 text/html", rec.Code, rec.Header().Get("Content-Type"))
@@ -90,7 +90,7 @@ func TestFilesListing(t *testing.T) {
 }
 
 func TestFilesServeFile(t *testing.T) {
-	h := newFileServer(fileFixture(t), "")
+	h := newFileServer(fileFixture(t), "", false)
 	if rec := getFile(h, "/sub/b.txt", nil); rec.Code != 200 || rec.Body.String() != "bee" {
 		t.Errorf("got %d %q, want 200 bee", rec.Code, rec.Body.String())
 	}
@@ -100,14 +100,14 @@ func TestFilesServeFile(t *testing.T) {
 }
 
 func TestFilesSubfolderRedirect(t *testing.T) {
-	rec := getFile(newFileServer(fileFixture(t), ""), "/sub", nil)
+	rec := getFile(newFileServer(fileFixture(t), "", false), "/sub", nil)
 	if rec.Code != http.StatusMovedPermanently && rec.Code != http.StatusFound || rec.Header().Get("Location") != "/sub/" {
 		t.Errorf("got %d Location %q, want redirect to /sub/", rec.Code, rec.Header().Get("Location"))
 	}
 }
 
 func TestFilesHidden(t *testing.T) {
-	h := newFileServer(fileFixture(t), "")
+	h := newFileServer(fileFixture(t), "", false)
 	for _, p := range []string{"/.env", "/.git/config", "/.git/"} {
 		if rec := getFile(h, p, nil); rec.Code != 404 {
 			t.Errorf("%s: got %d, want 404", p, rec.Code)
@@ -116,7 +116,7 @@ func TestFilesHidden(t *testing.T) {
 }
 
 func TestFilesNoEscape(t *testing.T) {
-	h := newFileServer(fileFixture(t), "")
+	h := newFileServer(fileFixture(t), "", false)
 	for _, p := range []string{"/../x", "/%2e%2e/x", "/sub/../../x", "/out"} {
 		rec := getFile(h, p, nil)
 		if strings.Contains(rec.Body.String(), secret) || rec.Code == 200 {
@@ -126,7 +126,7 @@ func TestFilesNoEscape(t *testing.T) {
 }
 
 func TestFilesSingle(t *testing.T) {
-	h := newFileServer(fileFixture(t), "index.txt")
+	h := newFileServer(fileFixture(t), "index.txt", false)
 	if rec := getFile(h, "/index.txt", nil); rec.Code != 200 || rec.Body.String() != "index" {
 		t.Errorf("/index.txt: got %d %q", rec.Code, rec.Body.String())
 	}
@@ -148,7 +148,7 @@ func TestHumanSize(t *testing.T) {
 }
 
 func TestFilesSymlinksRefused(t *testing.T) {
-	h := newFileServer(fileFixture(t), "")
+	h := newFileServer(fileFixture(t), "", false)
 	for _, p := range []string{"/envlink", "/out"} {
 		if rec := getFile(h, p, nil); rec.Code != 404 || strings.Contains(rec.Body.String(), secret) {
 			t.Errorf("%s: got %d %q, want 404", p, rec.Code, rec.Body.String())
@@ -166,7 +166,7 @@ func TestFilesOddNames(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows forbids : and ? in file names")
 	}
-	h := newFileServer(fileFixture(t), "")
+	h := newFileServer(fileFixture(t), "", false)
 	body := getFile(h, "/", nil).Body.String()
 	if !strings.Contains(body, `href="./foo:bar.txt"`) {
 		t.Errorf("colon name link broken:\n%s", body)

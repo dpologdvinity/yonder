@@ -19,7 +19,8 @@ var listingTmpl = template.Must(template.New("list").Parse(`<!doctype html>
 <title>{{.Title}}</title>
 <style>body{font:16px system-ui,sans-serif;margin:1rem}a{display:block;padding:.6rem 0;border-bottom:1px solid #ddd;text-decoration:none}span{float:right;color:#777}</style>
 </head><body><h1>{{.Title}}</h1>
-{{range .Entries}}<a href="{{.Href}}">{{.Name}}{{if .Size}}<span>{{.Size}}</span>{{end}}</a>
+{{if .Upload}}<form method="post" enctype="multipart/form-data"><input type="file" name="file" multiple> <button>Upload</button></form>
+{{end}}{{range .Entries}}<a href="{{.Href}}">{{.Name}}{{if .Size}}<span>{{.Size}}</span>{{end}}</a>
 {{end}}</body></html>
 `))
 
@@ -27,7 +28,8 @@ type listEntry struct{ Name, Href, Size string }
 
 // newFileServer serves files from root. With only set, just that one file is reachable.
 // All access goes through os.Root, so ".." and symlinks cannot leave the shared folder.
-func newFileServer(root *os.Root, only string) http.Handler {
+// With upload set, folder listings accept files posted from other devices.
+func newFileServer(root *os.Root, only string, upload bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rel, ok := safeRel(r.URL.Path, runtime.GOOS == "windows")
 		if !ok || (only != "" && rel != "." && rel != only) {
@@ -52,13 +54,26 @@ func newFileServer(root *os.Root, only string) http.Handler {
 			http.NotFound(w, r)
 			return
 		}
+		dirURL := (&url.URL{Path: "/" + strings.TrimPrefix(rel, ".") + "/"}).EscapedPath()
+		if strings.HasPrefix(dirURL, "//") {
+			dirURL = "/"
+		}
+		if r.Method == http.MethodPost {
+			if !upload || !info.IsDir() {
+				w.Header().Set("Allow", "GET, HEAD")
+				http.Error(w, "uploads are off", http.StatusMethodNotAllowed)
+				return
+			}
+			receiveUpload(w, r, root, rel, dirURL)
+			return
+		}
 		if info.IsDir() {
 			if !strings.HasSuffix(r.URL.Path, "/") {
 				// Relative links in the listing need the trailing slash.
-				http.Redirect(w, r, (&url.URL{Path: "/" + strings.TrimPrefix(rel, ".") + "/"}).EscapedPath(), http.StatusMovedPermanently)
+				http.Redirect(w, r, dirURL, http.StatusMovedPermanently)
 				return
 			}
-			serveListing(w, root, rel, only, path.Clean("/"+rel))
+			serveListing(w, root, rel, only, path.Clean("/"+rel), upload)
 			return
 		}
 		f, err := root.Open(rel)
@@ -71,7 +86,7 @@ func newFileServer(root *os.Root, only string) http.Handler {
 	})
 }
 
-func serveListing(w http.ResponseWriter, root *os.Root, rel, only, urlPath string) {
+func serveListing(w http.ResponseWriter, root *os.Root, rel, only, urlPath string, upload bool) {
 	dir, err := root.Open(rel)
 	if err != nil {
 		http.Error(w, "cannot read folder", http.StatusInternalServerError)
@@ -109,8 +124,9 @@ func serveListing(w http.ResponseWriter, root *os.Root, rel, only, urlPath strin
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	listingTmpl.Execute(w, struct {
 		Title   string
+		Upload  bool
 		Entries []listEntry
-	}{urlPath, list})
+	}{urlPath, upload, list})
 }
 
 // humanSize formats bytes with a 1024 base: 0 B, 999 B, 1.0 KB, 1.5 MB.

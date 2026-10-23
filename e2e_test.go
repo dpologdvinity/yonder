@@ -2,8 +2,10 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/http/cookiejar"
@@ -172,5 +174,27 @@ func TestEndToEndFolder(t *testing.T) {
 	}
 	if code, body := get(t, client, url[:strings.Index(url, "/?")]+"/hello.txt"); code != 200 || body != "hi" {
 		t.Errorf("file: got %d %q, want 200 hi", code, body)
+	}
+}
+
+func TestEndToEndUpload(t *testing.T) {
+	dir := t.TempDir()
+	url, _, _ := startYonderOn(t, dir, `http://[0-9.]+:%d/\?yonder=[A-Za-z0-9_-]{22}`, "--upload")
+	jar, _ := cookiejar.New(nil)
+	client := &http.Client{Jar: jar}
+	get(t, client, url) // sets the cookie
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	fw, _ := mw.CreateFormFile("file", "phone.txt")
+	fw.Write([]byte("from phone"))
+	mw.Close()
+	resp, err := client.Post(url[:strings.Index(url, "/?")]+"/", mw.FormDataContentType(), &buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if b, err := os.ReadFile(filepath.Join(dir, "phone.txt")); err != nil || string(b) != "from phone" {
+		t.Errorf("uploaded file = %q, %v", b, err)
 	}
 }
