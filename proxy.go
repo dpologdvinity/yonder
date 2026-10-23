@@ -25,7 +25,8 @@ func newProxy(targetAddr string, port int) *httputil.ReverseProxy {
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(target)
 			pr.Out.Host = local
-			if pr.Out.Header.Get("Origin") != "" {
+			// Only same-site Origins: rewriting others would defeat the dev server's CSRF checks.
+			if pr.Out.Header.Get("Origin") == "http://"+pr.In.Host {
 				pr.Out.Header.Set("Origin", "http://"+local)
 			}
 			pr.Out = pr.Out.WithContext(context.WithValue(pr.Out.Context(), clientHostKey{}, pr.In.Host))

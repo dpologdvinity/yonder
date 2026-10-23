@@ -73,6 +73,15 @@ func TestProxyOriginRewrite(t *testing.T) {
 	}
 }
 
+func TestProxyForeignOriginUnchanged(t *testing.T) {
+	var gotOrigin string
+	url, _ := setup(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { gotOrigin = r.Header.Get("Origin") }), plainProxy)
+	do(t, "POST", url, http.Header{"Origin": {"https://evil.example"}})
+	if gotOrigin != "https://evil.example" {
+		t.Errorf("upstream Origin = %q, want https://evil.example unchanged", gotOrigin)
+	}
+}
+
 func TestProxyLocationRewrite(t *testing.T) {
 	var loc string
 	url, port := setup(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
