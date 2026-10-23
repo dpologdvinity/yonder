@@ -59,11 +59,22 @@ The first time yonder listens for connections, your OS may block or ask:
 
 - **Windows:** allow `yonder.exe` in the Windows Defender Firewall prompt.
 - **macOS:** allow incoming connections when the application firewall asks.
-- **WSL (mirrored mode):** the Hyper-V firewall may block inbound traffic. See [Microsoft's WSL networking docs](https://learn.microsoft.com/en-us/windows/wsl/networking#mirrored-mode-networking).
+- **WSL (mirrored mode):** the Hyper-V firewall blocks inbound traffic to WSL by default, so the other device times out. See the WSL section below.
+
+If the other device can't connect, watch yonder's output. No `device connected` line means the connection never reached yonder: a firewall or the network dropped it.
 
 ## WSL
 
 In WSL's default NAT mode, other devices can't reach WSL at all; yonder prints a hint when it detects this. Either set `networkingMode=mirrored` under `[wsl2]` in `%UserProfile%\.wslconfig` and run `wsl --shutdown`, or run the Windows build, `yonder.exe`.
+
+In mirrored mode, open yonder's port once in an **admin** PowerShell. For `yonder 8000` the port is 18000:
+
+```powershell
+New-NetFirewallHyperVRule -Name yonder -DisplayName yonder -Direction Inbound -VMCreatorId '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' -Protocol TCP -LocalPorts 18000
+New-NetFirewallRule -DisplayName yonder -Direction Inbound -Protocol TCP -LocalPort 18000 -Action Allow -Profile Any
+```
+
+Remove them later with `Remove-NetFirewallHyperVRule -Name yonder` and `Remove-NetFirewallRule -DisplayName yonder`.
 
 ## License
 
