@@ -19,7 +19,12 @@ import (
 
 var version = "dev"
 
-const usage = "usage: yonder <port> [--listen N]\n       yonder --version\n"
+const usage = "usage: yonder <port> [--listen N] [--open]\n       yonder --version\n"
+
+type options struct {
+	port, listenPort  int
+	open, showVersion bool
+}
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -29,41 +34,44 @@ func main() {
 }
 
 // parseArgs accepts flags before or after the port.
-func parseArgs(args []string) (port, listenPort int, showVersion bool, err error) {
+func parseArgs(args []string) (options, error) {
+	var o options
 	fs := flag.NewFlagSet("yonder", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	fs.IntVar(&listenPort, "listen", 0, "")
-	fs.BoolVar(&showVersion, "version", false, "")
-	if err = fs.Parse(args); err != nil {
-		return 0, 0, false, err
+	fs.IntVar(&o.listenPort, "listen", 0, "")
+	fs.BoolVar(&o.open, "open", false, "")
+	fs.BoolVar(&o.showVersion, "version", false, "")
+	if err := fs.Parse(args); err != nil {
+		return options{}, err
 	}
-	if showVersion {
-		return 0, 0, true, nil
+	if o.showVersion {
+		return options{showVersion: true}, nil
 	}
 	if fs.NArg() == 0 {
-		return 0, 0, false, errors.New("missing port")
+		return options{}, errors.New("missing port")
 	}
-	port, err = strconv.Atoi(fs.Arg(0))
+	port, err := strconv.Atoi(fs.Arg(0))
 	if err != nil || port < 1 || port > 65535 {
-		return 0, 0, false, fmt.Errorf("invalid port %q", fs.Arg(0))
+		return options{}, fmt.Errorf("invalid port %q", fs.Arg(0))
 	}
-	if err = fs.Parse(fs.Args()[1:]); err != nil {
-		return 0, 0, false, err
+	o.port = port
+	if err := fs.Parse(fs.Args()[1:]); err != nil {
+		return options{}, err
 	}
-	if showVersion {
-		return 0, 0, true, nil
+	if o.showVersion {
+		return options{showVersion: true}, nil
 	}
 	if fs.NArg() > 0 {
-		return 0, 0, false, fmt.Errorf("unexpected argument %q", fs.Arg(0))
+		return options{}, fmt.Errorf("unexpected argument %q", fs.Arg(0))
 	}
-	if listenPort < 0 || listenPort > 65535 {
-		return 0, 0, false, fmt.Errorf("invalid --listen port %d", listenPort)
+	if o.listenPort < 0 || o.listenPort > 65535 {
+		return options{}, fmt.Errorf("invalid --listen port %d", o.listenPort)
 	}
-	return port, listenPort, false, nil
+	return o, nil
 }
 
 func run(args []string, stdout, stderr io.Writer, ctx context.Context) int {
-	port, listenPort, showVersion, err := parseArgs(args)
+	opts, err := parseArgs(args)
 	if errors.Is(err, flag.ErrHelp) {
 		fmt.Fprint(stdout, usage)
 		return 0
@@ -72,7 +80,7 @@ func run(args []string, stdout, stderr io.Writer, ctx context.Context) int {
 		fmt.Fprint(stderr, usage)
 		return 1
 	}
-	if showVersion {
+	if opts.showVersion {
 		fmt.Fprintf(stdout, "yonder %s\n", version)
 		return 0
 	}
@@ -81,6 +89,7 @@ func run(args []string, stdout, stderr io.Writer, ctx context.Context) int {
 		return 1
 	}
 
+	port := opts.port
 	target, err := findTarget(port)
 	if err != nil {
 		return fail(err)
@@ -92,26 +101,34 @@ func run(args []string, stdout, stderr io.Writer, ctx context.Context) int {
 	if len(addrs) == 0 {
 		return fail(errors.New("no network connection found"))
 	}
-	ln, err := listen(port, listenPort)
+	ln, err := listen(port, opts.listenPort)
 	if err != nil {
 		return fail(err)
 	}
 	actual := ln.Addr().(*net.TCPAddr).Port
 
-	url := fmt.Sprintf("http://%s:%d", addrs[0], actual)
+	var handler http.Handler = newProxy(target, port)
+	suffix, warning := "", "Anyone on this network can open this URL (--open)."
+	if !opts.open {
+		token := newToken()
+		handler = withAuth(handler, token, actual)
+		suffix, warning = "/?yonder="+token, "Only people with this link or QR code can open it."
+	}
+
+	url := fmt.Sprintf("http://%s:%d%s", addrs[0], actual, suffix)
 	fmt.Fprintf(stdout, "yonder: sharing localhost:%d\n\n  %s\n", port, url)
 	qrterminal.GenerateHalfBlock(url, qrterminal.L, stdout)
 	for _, a := range addrs[1:] {
-		fmt.Fprintf(stdout, "  also: http://%s:%d\n", a, actual)
+		fmt.Fprintf(stdout, "  also: http://%s:%d%s\n", a, actual, suffix)
 	}
-	fmt.Fprintln(stdout, "\nAnyone on this network can open this URL. There is no access control yet.")
+	fmt.Fprintln(stdout, "\n"+warning)
 	if hint := detectWSLHint(); hint != "" {
 		fmt.Fprint(stdout, "\n"+hint)
 	}
 	fmt.Fprintln(stdout)
 
 	// No write timeout: SSE and WebSockets are long-lived. The header timeout stops slowloris.
-	srv := &http.Server{Handler: withLog(newProxy(target, port), stdout, time.Now), ReadHeaderTimeout: 10 * time.Second, ConnState: newConnLogger(stdout, time.Now)}
+	srv := &http.Server{Handler: withLog(handler, stdout, time.Now), ReadHeaderTimeout: 10 * time.Second, ConnState: newConnLogger(stdout, time.Now)}
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(ln) }()
 	select {

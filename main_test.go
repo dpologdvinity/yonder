@@ -10,26 +10,27 @@ import (
 
 func TestParseArgs(t *testing.T) {
 	ok := []struct {
-		args         []string
-		port, listen int
-		showVersion  bool
+		args []string
+		want options
 	}{
-		{[]string{"3000"}, 3000, 0, false},
-		{[]string{"3000", "--listen", "4000"}, 3000, 4000, false},
-		{[]string{"--listen", "4000", "3000"}, 3000, 4000, false},
-		{[]string{"--version"}, 0, 0, true},
-		{[]string{"3000", "--version"}, 0, 0, true},
+		{[]string{"3000"}, options{port: 3000}},
+		{[]string{"3000", "--listen", "4000"}, options{port: 3000, listenPort: 4000}},
+		{[]string{"--listen", "4000", "3000"}, options{port: 3000, listenPort: 4000}},
+		{[]string{"3000", "--open"}, options{port: 3000, open: true}},
+		{[]string{"--open", "3000"}, options{port: 3000, open: true}},
+		{[]string{"--version"}, options{showVersion: true}},
+		{[]string{"3000", "--version"}, options{showVersion: true}},
 	}
 	for _, tt := range ok {
-		port, listen, v, err := parseArgs(tt.args)
-		if err != nil || port != tt.port || listen != tt.listen || v != tt.showVersion {
-			t.Errorf("parseArgs(%q) = %d, %d, %v, %v; want %d, %d, %v, nil", tt.args, port, listen, v, err, tt.port, tt.listen, tt.showVersion)
+		got, err := parseArgs(tt.args)
+		if err != nil || got != tt.want {
+			t.Errorf("parseArgs(%q) = %+v, %v; want %+v, nil", tt.args, got, err, tt.want)
 		}
 	}
 
 	bad := [][]string{{}, {"abc"}, {"0"}, {"70000"}, {"-1"}, {"3000", "4000"}, {"3000", "--listen", "x"}, {"3000", "--listen", "70000"}, {"3000", "--nope"}}
 	for _, args := range bad {
-		if _, _, _, err := parseArgs(args); err == nil {
+		if _, err := parseArgs(args); err == nil {
 			t.Errorf("parseArgs(%q): want error, got nil", args)
 		}
 	}
@@ -68,7 +69,7 @@ func TestRunHelpExitsZero(t *testing.T) {
 		if code := run([]string{flagName}, &out, &errOut, context.Background()); code != 0 {
 			t.Errorf("%s: exit code = %d, want 0", flagName, code)
 		}
-		if !strings.HasPrefix(out.String(), "usage: yonder") || errOut.Len() != 0 {
+		if !strings.HasPrefix(out.String(), "usage: yonder <port> [--listen N] [--open]") || errOut.Len() != 0 {
 			t.Errorf("%s: stdout = %q, stderr = %q; want usage on stdout only", flagName, out.String(), errOut.String())
 		}
 	}

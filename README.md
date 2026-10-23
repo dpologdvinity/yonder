@@ -20,6 +20,7 @@ Or download a binary for Linux, macOS or Windows from [Releases](https://github.
 ```
 yonder <port>             share localhost:<port> on the LAN
 yonder <port> --listen N  use proxy port N
+yonder <port> --open      share without the access token
 yonder --version
 ```
 
@@ -27,10 +28,10 @@ yonder --version
 $ yonder 3000
 yonder: sharing localhost:3000
 
-  http://192.168.1.20:13000
+  http://192.168.1.20:13000/?yonder=…
   <QR code>
 
-Anyone on this network can open this URL. There is no access control yet.
+Only people with this link or QR code can open it.
 ```
 
 Scan the QR code or type the URL on the other device. Each request shows up as one log line.
@@ -40,11 +41,15 @@ yonder runs a small proxy in front of your dev server, so you don't need to chan
 - It works with servers that only listen on `127.0.0.1` or `::1`.
 - It rewrites the `Host` and `Origin` headers, so servers that check them (Vite, webpack, Next.js) accept the request.
 - Hot reload keeps working: WebSockets and server-sent events pass through.
-- The proxy port is your port + 10000, so the URL stays the same across restarts. Just refresh the page.
+- The proxy port is your port + 10000, so it stays the same across restarts (handy for firewall rules). The access token does not: after a restart, scan the new QR code.
 
 ## Is it safe?
 
-Anyone on the same network can open the URL while yonder runs. There is no password or token yet. Use it on networks you trust, not on public Wi-Fi, and stop it with Ctrl-C when you're done. Only the one port you name is shared.
+The link and QR code carry a secret token. Anyone without it gets a 403 and never reaches your app. The first visit swaps the token for a cookie, so it disappears from the address bar. Every restart makes a new token, which cuts off old links. Only the one port you name is shared.
+
+- `--open` turns the token off. Use it only on networks you trust.
+- yonder speaks plain HTTP. On open (passwordless) Wi-Fi, or on WPA2 Wi-Fi with a shared password, others on the network can capture traffic and copy the token or cookie. Avoid sharing private data there. Enterprise Wi-Fi with per-user logins and WPA3 protect each device's traffic.
+- Stop sharing with Ctrl-C.
 
 ## Known limitations
 

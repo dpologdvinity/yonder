@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -13,24 +14,51 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
-func TestEndToEnd(t *testing.T) {
+var (
+	buildOnce sync.Once
+	binPath   string
+	buildErr  error
+)
+
+// buildBinary builds yonder once per test run.
+func buildBinary(t *testing.T) string {
+	t.Helper()
 	if testing.Short() {
 		t.Skip("builds the binary")
 	}
-	bin := filepath.Join(t.TempDir(), "yonder")
-	if runtime.GOOS == "windows" {
-		bin += ".exe"
+	buildOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "yonder-e2e")
+		if err != nil {
+			buildErr = err
+			return
+		}
+		binPath = filepath.Join(dir, "yonder")
+		if runtime.GOOS == "windows" {
+			binPath += ".exe"
+		}
+		if out, err := exec.Command("go", "build", "-o", binPath, ".").CombinedOutput(); err != nil {
+			buildErr = fmt.Errorf("build: %v\n%s", err, out)
+		}
+	})
+	if buildErr != nil {
+		t.Fatal(buildErr)
 	}
-	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, out)
-	}
+	return binPath
+}
+
+// startYonder runs the binary in front of an upstream that answers "hello"
+// and returns the first printed URL matching urlPattern (%d is the listen port).
+func startYonder(t *testing.T, urlPattern string, extra ...string) (string, *exec.Cmd, chan error) {
+	t.Helper()
+	bin := buildBinary(t)
 
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "hello") }))
-	defer up.Close()
+	t.Cleanup(up.Close)
 	upPort := up.Listener.Addr().(*net.TCPAddr).Port
 
 	free, err := net.Listen("tcp", "0.0.0.0:0")
@@ -40,16 +68,17 @@ func TestEndToEnd(t *testing.T) {
 	listenPort := free.Addr().(*net.TCPAddr).Port
 	free.Close()
 
-	cmd := exec.Command(bin, fmt.Sprint(upPort), "--listen", fmt.Sprint(listenPort))
+	args := append([]string{fmt.Sprint(upPort), "--listen", fmt.Sprint(listenPort)}, extra...)
+	cmd := exec.Command(bin, args...)
 	stdout, _ := cmd.StdoutPipe()
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	defer cmd.Process.Kill()
+	t.Cleanup(func() { cmd.Process.Kill() })
 
-	urlRe := regexp.MustCompile(fmt.Sprintf(`http://[0-9.]+:%d`, listenPort))
+	urlRe := regexp.MustCompile(fmt.Sprintf(urlPattern, listenPort))
 	found := make(chan string, 1)
 	go func() {
 		sc := bufio.NewScanner(stdout)
@@ -62,13 +91,12 @@ func TestEndToEnd(t *testing.T) {
 			}
 		}
 	}()
-
 	exited := make(chan error, 1)
 	go func() { exited <- cmd.Wait() }()
 
-	var url string
 	select {
-	case url = <-found:
+	case u := <-found:
+		return u, cmd, exited
 	case <-exited:
 		if strings.Contains(stderr.String(), "no network connection found") {
 			t.Skip("no LAN address on this machine")
@@ -77,15 +105,30 @@ func TestEndToEnd(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("no URL printed within 10s")
 	}
+	return "", nil, nil
+}
 
-	resp, err := http.Get(url)
+func get(t *testing.T, client *http.Client, url string) (int, string) {
+	t.Helper()
+	resp, err := client.Get(url)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if string(body) != "hello" {
-		t.Errorf("body = %q, want hello", body)
+	return resp.StatusCode, string(body)
+}
+
+func TestEndToEnd(t *testing.T) {
+	url, cmd, exited := startYonder(t, `http://[0-9.]+:%d/\?yonder=[A-Za-z0-9_-]{22}`)
+
+	jar, _ := cookiejar.New(nil)
+	if code, body := get(t, &http.Client{Jar: jar}, url); code != 200 || body != "hello" {
+		t.Errorf("share link: got %d %q, want 200 hello", code, body)
+	}
+	bare := url[:strings.Index(url, "/?")] + "/"
+	if code, _ := get(t, http.DefaultClient, bare); code != http.StatusForbidden {
+		t.Errorf("no token: got %d, want 403", code)
 	}
 
 	if runtime.GOOS == "windows" {
@@ -99,5 +142,15 @@ func TestEndToEnd(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Error("yonder did not exit within 3s of interrupt")
+	}
+}
+
+func TestEndToEndOpen(t *testing.T) {
+	url, _, _ := startYonder(t, `http://[0-9.]+:%d\b`, "--open")
+	if strings.Contains(url, "yonder=") {
+		t.Fatalf("--open URL %q carries a token", url)
+	}
+	if code, body := get(t, http.DefaultClient, url); code != 200 || body != "hello" {
+		t.Errorf("--open: got %d %q, want 200 hello", code, body)
 	}
 }
