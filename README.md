@@ -4,11 +4,12 @@
 
 Open the site running on your `localhost` from your phone, your iPad, or a friend's laptop on the same Wi-Fi. One command, one QR code, nothing to install on the other device.
 
-<!-- demo: docs/demo.gif, recorded with vhs -->
+![yonder demo](docs/demo.gif)
 
 ## Install
 
 ```sh
+brew install dpologdvinity/tap/yonder     # macOS and Linux
 go install github.com/dpologdvinity/yonder@latest
 ```
 
