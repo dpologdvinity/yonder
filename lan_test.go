@@ -40,7 +40,12 @@ func TestLanAddrs(t *testing.T) {
 	}{
 		{"best is primary", ifs, net.ParseIP("10.207.68.227"), []string{"10.207.68.227", "172.17.0.1"}},
 		{"no best", ifs, nil, []string{"10.207.68.227", "172.17.0.1"}},
-		{"best is bridge", ifs, net.ParseIP("172.17.0.1"), []string{"172.17.0.1", "10.207.68.227"}},
+		{"best is bridge", ifs, net.ParseIP("172.17.0.1"), []string{"10.207.68.227", "172.17.0.1"}},
+		{"best is full-tunnel VPN", []iface{
+			{"tun0", net.FlagUp, ips("10.8.0.2")},
+			{"eth0", net.FlagUp, ips("192.168.1.5")},
+			{"vboxnet0", net.FlagUp, ips("192.168.56.1")},
+		}, net.ParseIP("10.8.0.2"), []string{"192.168.1.5", "10.8.0.2", "192.168.56.1"}},
 		{"best filtered out", ifs, net.ParseIP("10.255.255.254"), []string{"10.207.68.227", "172.17.0.1"}},
 		{"no interfaces", nil, nil, []string{}},
 		{"duplicate address", []iface{

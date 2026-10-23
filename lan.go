@@ -22,14 +22,15 @@ func lanAddrs(ifaces []iface, best net.IP) []net.IP {
 		if ifc.Flags&net.FlagUp == 0 || ifc.Flags&net.FlagLoopback != 0 {
 			continue
 		}
-		isBridge := strings.HasPrefix(ifc.Name, "docker") || strings.HasPrefix(ifc.Name, "br-") || strings.HasPrefix(ifc.Name, "veth")
+		isBridge := isVirtual(ifc.Name)
 		for _, ip := range ifc.IPs {
 			ip4 := ip.To4()
 			if ip4 == nil || !ip4.IsPrivate() || seen[ip4.String()] {
 				continue
 			}
 			seen[ip4.String()] = true
-			if best != nil && ip4.Equal(best) {
+			// A tunnel or bridge never wins best: a full-tunnel VPN owns the default route but the phone cannot reach it.
+			if best != nil && ip4.Equal(best) && !isBridge {
 				bestFound = true
 				continue
 			}
@@ -46,6 +47,16 @@ func lanAddrs(ifaces []iface, best net.IP) []net.IP {
 	}
 	out = append(out, normal...)
 	return append(out, bridge...)
+}
+
+// isVirtual reports container bridges, VM host-only networks and VPN tunnels.
+func isVirtual(name string) bool {
+	for _, p := range []string{"docker", "br-", "veth", "vboxnet", "vmnet", "bridge", "tun", "utun", "tap", "wg", "ppp"} {
+		if strings.HasPrefix(name, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // systemLANAddrs reads the machine's interfaces and returns lanAddrs for them.
