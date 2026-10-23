@@ -50,6 +50,9 @@ func parseArgs(args []string) (port, listenPort int, showVersion bool, err error
 	if err = fs.Parse(fs.Args()[1:]); err != nil {
 		return 0, 0, false, err
 	}
+	if showVersion {
+		return 0, 0, true, nil
+	}
 	if fs.NArg() > 0 {
 		return 0, 0, false, fmt.Errorf("unexpected argument %q", fs.Arg(0))
 	}
@@ -61,6 +64,10 @@ func parseArgs(args []string) (port, listenPort int, showVersion bool, err error
 
 func run(args []string, stdout, stderr io.Writer, ctx context.Context) int {
 	port, listenPort, showVersion, err := parseArgs(args)
+	if errors.Is(err, flag.ErrHelp) {
+		fmt.Fprint(stdout, usage)
+		return 0
+	}
 	if err != nil {
 		fmt.Fprint(stderr, usage)
 		return 1
@@ -103,7 +110,8 @@ func run(args []string, stdout, stderr io.Writer, ctx context.Context) int {
 	}
 	fmt.Fprintln(stdout)
 
-	srv := &http.Server{Handler: withLog(newProxy(target, port), stdout, time.Now)}
+	// No write timeout: SSE and WebSockets are long-lived. The header timeout stops slowloris.
+	srv := &http.Server{Handler: withLog(newProxy(target, port), stdout, time.Now), ReadHeaderTimeout: 10 * time.Second}
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(ln) }()
 	select {

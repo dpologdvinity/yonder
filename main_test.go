@@ -18,6 +18,7 @@ func TestParseArgs(t *testing.T) {
 		{[]string{"3000", "--listen", "4000"}, 3000, 4000, false},
 		{[]string{"--listen", "4000", "3000"}, 3000, 4000, false},
 		{[]string{"--version"}, 0, 0, true},
+		{[]string{"3000", "--version"}, 0, 0, true},
 	}
 	for _, tt := range ok {
 		port, listen, v, err := parseArgs(tt.args)
@@ -58,5 +59,17 @@ func TestRunNothingListening(t *testing.T) {
 	}
 	if want := fmt.Sprintf("yonder: nothing is listening on localhost:%d\n", port); errOut.String() != want {
 		t.Errorf("stderr = %q, want %q", errOut.String(), want)
+	}
+}
+
+func TestRunHelpExitsZero(t *testing.T) {
+	for _, flagName := range []string{"-h", "--help"} {
+		var out, errOut strings.Builder
+		if code := run([]string{flagName}, &out, &errOut, context.Background()); code != 0 {
+			t.Errorf("%s: exit code = %d, want 0", flagName, code)
+		}
+		if !strings.HasPrefix(out.String(), "usage: yonder") || errOut.Len() != 0 {
+			t.Errorf("%s: stdout = %q, stderr = %q; want usage on stdout only", flagName, out.String(), errOut.String())
+		}
 	}
 }
