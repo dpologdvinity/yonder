@@ -18,6 +18,9 @@ func TestParseArgs(t *testing.T) {
 		{[]string{"--listen", "4000", "3000"}, options{port: 3000, listenPort: 4000}},
 		{[]string{"3000", "--open"}, options{port: 3000, open: true}},
 		{[]string{"--open", "3000"}, options{port: 3000, open: true}},
+		{[]string{"./docs"}, options{path: "./docs"}},
+		{[]string{"notes.pdf", "--open"}, options{path: "notes.pdf", open: true}},
+		{[]string{"abc"}, options{path: "abc"}},
 		{[]string{"--version"}, options{showVersion: true}},
 		{[]string{"3000", "--version"}, options{showVersion: true}},
 	}
@@ -28,7 +31,7 @@ func TestParseArgs(t *testing.T) {
 		}
 	}
 
-	bad := [][]string{{}, {"abc"}, {"0"}, {"70000"}, {"-1"}, {"3000", "4000"}, {"3000", "--listen", "x"}, {"3000", "--listen", "70000"}, {"3000", "--nope"}}
+	bad := [][]string{{}, {"0"}, {"70000"}, {"-1"}, {"3000", "4000"}, {"3000", "--listen", "x"}, {"3000", "--listen", "70000"}, {"3000", "--nope"}}
 	for _, args := range bad {
 		if _, err := parseArgs(args); err == nil {
 			t.Errorf("parseArgs(%q): want error, got nil", args)
@@ -38,7 +41,7 @@ func TestParseArgs(t *testing.T) {
 
 func TestRunUsage(t *testing.T) {
 	var out, errOut strings.Builder
-	if code := run([]string{"abc"}, &out, &errOut, context.Background()); code != 1 {
+	if code := run([]string{"70000"}, &out, &errOut, context.Background()); code != 1 {
 		t.Errorf("exit code = %d, want 1", code)
 	}
 	if !strings.HasPrefix(errOut.String(), "usage: yonder") {
@@ -69,8 +72,18 @@ func TestRunHelpExitsZero(t *testing.T) {
 		if code := run([]string{flagName}, &out, &errOut, context.Background()); code != 0 {
 			t.Errorf("%s: exit code = %d, want 0", flagName, code)
 		}
-		if !strings.HasPrefix(out.String(), "usage: yonder <port> [--listen N] [--open]") || errOut.Len() != 0 {
+		if !strings.HasPrefix(out.String(), "usage: yonder <port|path> [--listen N] [--open]") || errOut.Len() != 0 {
 			t.Errorf("%s: stdout = %q, stderr = %q; want usage on stdout only", flagName, out.String(), errOut.String())
 		}
+	}
+}
+
+func TestRunMissingPath(t *testing.T) {
+	var out, errOut strings.Builder
+	if code := run([]string{"/nonexistent/x"}, &out, &errOut, context.Background()); code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+	if want := "yonder: no such file or folder: /nonexistent/x\n"; errOut.String() != want {
+		t.Errorf("stderr = %q, want %q", errOut.String(), want)
 	}
 }

@@ -19,6 +19,7 @@ Or download a binary for Linux, macOS or Windows from [Releases](https://github.
 
 ```
 yonder <port>             share localhost:<port> on the LAN
+yonder <path>             share a file or folder
 yonder <port> --listen N  use proxy port N
 yonder <port> --open      share without the access token
 yonder --version
@@ -42,6 +43,21 @@ yonder runs a small proxy in front of your dev server, so you don't need to chan
 - It rewrites the `Host` and `Origin` headers, so servers that check them (Vite, webpack, Next.js) accept the request.
 - Hot reload keeps working: WebSockets and server-sent events pass through.
 - The proxy port is your port + 10000, so it stays the same across restarts (handy for firewall rules). The access token does not: after a restart, scan the new QR code.
+
+## Share files
+
+```sh
+yonder ./photos        # a folder: the phone gets a list of files to tap and download
+yonder notes.pdf       # one file: nothing else in its folder is reachable
+```
+
+Same QR code and token as port sharing. The default port is 18000.
+
+- Hidden files and folders (`.env`, `.git`, `.ssh`, anything starting with `.`) are never listed or served.
+- Symlinks and `..` can't reach outside the shared folder.
+- Share a dedicated folder, not your home directory.
+- Download only for now; sending files from the phone to the laptop is planned.
+- A folder named like a number is a port to yonder: use `yonder ./3000`.
 
 ## Is it safe?
 

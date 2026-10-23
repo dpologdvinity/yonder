@@ -55,11 +55,15 @@ func buildBinary(t *testing.T) string {
 // and returns the first printed URL matching urlPattern (%d is the listen port).
 func startYonder(t *testing.T, urlPattern string, extra ...string) (string, *exec.Cmd, chan error) {
 	t.Helper()
-	bin := buildBinary(t)
-
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "hello") }))
 	t.Cleanup(up.Close)
-	upPort := up.Listener.Addr().(*net.TCPAddr).Port
+	return startYonderOn(t, fmt.Sprint(up.Listener.Addr().(*net.TCPAddr).Port), urlPattern, extra...)
+}
+
+// startYonderOn runs the binary sharing target (a port or a path).
+func startYonderOn(t *testing.T, target, urlPattern string, extra ...string) (string, *exec.Cmd, chan error) {
+	t.Helper()
+	bin := buildBinary(t)
 
 	free, err := net.Listen("tcp", "0.0.0.0:0")
 	if err != nil {
@@ -68,7 +72,7 @@ func startYonder(t *testing.T, urlPattern string, extra ...string) (string, *exe
 	listenPort := free.Addr().(*net.TCPAddr).Port
 	free.Close()
 
-	args := append([]string{fmt.Sprint(upPort), "--listen", fmt.Sprint(listenPort)}, extra...)
+	args := append([]string{target, "--listen", fmt.Sprint(listenPort)}, extra...)
 	cmd := exec.Command(bin, args...)
 	stdout, _ := cmd.StdoutPipe()
 	var stderr strings.Builder
@@ -152,5 +156,21 @@ func TestEndToEndOpen(t *testing.T) {
 	}
 	if code, body := get(t, http.DefaultClient, url); code != 200 || body != "hello" {
 		t.Errorf("--open: got %d %q, want 200 hello", code, body)
+	}
+}
+
+func TestEndToEndFolder(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "hello.txt"), []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	url, _, _ := startYonderOn(t, dir, `http://[0-9.]+:%d/\?yonder=[A-Za-z0-9_-]{22}`)
+	jar, _ := cookiejar.New(nil)
+	client := &http.Client{Jar: jar}
+	if code, body := get(t, client, url); code != 200 || !strings.Contains(body, "hello.txt") {
+		t.Fatalf("listing: got %d %q", code, body)
+	}
+	if code, body := get(t, client, url[:strings.Index(url, "/?")]+"/hello.txt"); code != 200 || body != "hi" {
+		t.Errorf("file: got %d %q, want 200 hi", code, body)
 	}
 }

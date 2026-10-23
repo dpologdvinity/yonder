@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
@@ -19,10 +20,11 @@ import (
 
 var version = "dev"
 
-const usage = "usage: yonder <port> [--listen N] [--open]\n       yonder --version\n"
+const usage = "usage: yonder <port|path> [--listen N] [--open]\n       yonder --version\n"
 
 type options struct {
 	port, listenPort  int
+	path              string // set instead of port when sharing files
 	open, showVersion bool
 }
 
@@ -50,11 +52,13 @@ func parseArgs(args []string) (options, error) {
 	if fs.NArg() == 0 {
 		return options{}, errors.New("missing port")
 	}
-	port, err := strconv.Atoi(fs.Arg(0))
-	if err != nil || port < 1 || port > 65535 {
+	if port, err := strconv.Atoi(fs.Arg(0)); err != nil {
+		o.path = fs.Arg(0)
+	} else if port < 1 || port > 65535 {
 		return options{}, fmt.Errorf("invalid port %q", fs.Arg(0))
+	} else {
+		o.port = port
 	}
-	o.port = port
 	if err := fs.Parse(fs.Args()[1:]); err != nil {
 		return options{}, err
 	}
@@ -89,10 +93,21 @@ func run(args []string, stdout, stderr io.Writer, ctx context.Context) int {
 		return 1
 	}
 
+	var handler http.Handler
+	var what string
 	port := opts.port
-	target, err := findTarget(port)
-	if err != nil {
-		return fail(err)
+	if opts.path != "" {
+		h, abs, err := fileHandler(opts.path)
+		if err != nil {
+			return fail(err)
+		}
+		handler, what, port = h, abs, 8000 // default listen port 8000+10000
+	} else {
+		target, err := findTarget(port)
+		if err != nil {
+			return fail(err)
+		}
+		handler, what = newProxy(target, port), fmt.Sprintf("localhost:%d", port)
 	}
 	addrs, err := systemLANAddrs()
 	if err != nil {
@@ -107,7 +122,6 @@ func run(args []string, stdout, stderr io.Writer, ctx context.Context) int {
 	}
 	actual := ln.Addr().(*net.TCPAddr).Port
 
-	var handler http.Handler = newProxy(target, port)
 	suffix, warning := "", "Anyone on this network can open this URL (--open)."
 	if !opts.open {
 		token := newToken()
@@ -116,7 +130,7 @@ func run(args []string, stdout, stderr io.Writer, ctx context.Context) int {
 	}
 
 	url := fmt.Sprintf("http://%s:%d%s", addrs[0], actual, suffix)
-	fmt.Fprintf(stdout, "yonder: sharing localhost:%d\n\n  %s\n", port, url)
+	fmt.Fprintf(stdout, "yonder: sharing %s\n\n  %s\n", what, url)
 	qrterminal.GenerateHalfBlock(url, qrterminal.L, stdout)
 	for _, a := range addrs[1:] {
 		fmt.Fprintf(stdout, "  also: http://%s:%d%s\n", a, actual, suffix)
@@ -139,4 +153,25 @@ func run(args []string, stdout, stderr io.Writer, ctx context.Context) int {
 	case err := <-served:
 		return fail(err)
 	}
+}
+
+// fileHandler opens path for sharing: a folder is served whole, a file alone.
+func fileHandler(p string) (http.Handler, string, error) {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return nil, "", err
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return nil, "", fmt.Errorf("no such file or folder: %s", p)
+	}
+	dir, only := abs, ""
+	if !info.IsDir() {
+		dir, only = filepath.Dir(abs), filepath.Base(abs)
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, "", err
+	}
+	return newFileServer(root, only), abs, nil
 }
