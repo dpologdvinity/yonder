@@ -34,11 +34,16 @@ async function install() {
   try {
     const archivePath = path.join(tmp, file);
     fs.writeFileSync(archivePath, archive);
-    // tar ships with macOS, Linux and Windows 10+, and Windows' tar also reads zip.
-    execFileSync("tar", ["-xf", archivePath, "-C", tmp, exe]);
+    // tar ships with macOS, Linux and Windows 10+, and Windows' bsdtar also reads zip.
+    // On Windows use the system one: Git Bash's GNU tar cannot read zip and treats "C:" as a host.
+    const tar = process.platform === "win32" ? path.join(process.env.SystemRoot || "C:\\Windows", "System32", "tar.exe") : "tar";
+    execFileSync(tar, ["-xf", archivePath, "-C", tmp, exe]);
     fs.mkdirSync(path.dirname(binPath), { recursive: true });
-    fs.copyFileSync(path.join(tmp, exe), binPath);
-    fs.chmodSync(binPath, 0o755);
+    // Copy next to the target, then rename: a killed install must not leave a half-written binary.
+    const part = `${binPath}.${process.pid}.part`;
+    fs.copyFileSync(path.join(tmp, exe), part);
+    fs.chmodSync(part, 0o755);
+    fs.renameSync(part, binPath);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

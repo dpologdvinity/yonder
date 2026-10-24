@@ -57,7 +57,10 @@ def build(version: str, outdir: Path) -> list[Path]:
         if line.strip():
             digest, name = line.split()
             sums[name] = digest
-    readme = (Path(__file__).resolve().parent.parent / "README.md").read_text()
+    # PyPI shows the README without the repo, so relative image links must become absolute.
+    readme = (Path(__file__).resolve().parent.parent / "README.md").read_text().replace(
+        "](docs/", f"](https://raw.githubusercontent.com/{REPO}/master/docs/"
+    )
     metadata = (
         "Metadata-Version: 2.1\n"
         f"Name: yonder-cli\nVersion: {version}\n"
