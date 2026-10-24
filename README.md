@@ -2,9 +2,11 @@
 
 > your site, over yonder
 
-Open the site running on your `localhost` from your phone, your iPad, or a friend's laptop on the same Wi-Fi. One command, one QR code, nothing to install on the other device.
+yonder lets you open a website running on your own computer (`localhost`) from your phone, your iPad, or a friend's laptop on the same network. It can also share a file or a whole folder, and let the other device send files back. One command prints a link and a QR code. Nothing needs to be installed on the other device.
 
 ![yonder demo](docs/demo.gif)
+
+**Contents:** [Install](#install) · [Quick start](#quick-start) · [Usage](#usage) · [Share files](#share-files) · [How it works](#how-it-works) · [Is it safe?](#is-it-safe) · [Known limitations](#known-limitations) · [Firewalls](#firewalls) · [WSL](#wsl) · [Documentation](#documentation)
 
 ## Install
 
@@ -12,6 +14,7 @@ Open the site running on your `localhost` from your phone, your iPad, or a frien
 ```sh
 curl -fsSL https://raw.githubusercontent.com/dpologdvinity/yonder/master/install.sh | sh
 ```
+The script checks the download's SHA-256 before installing. Set `YONDER_VERSION=0.4.3` to install a specific version, or `YONDER_INSTALL_DIR` to choose the folder.
 
 **Homebrew** (macOS and Linux)
 ```sh
@@ -56,18 +59,14 @@ pip install yonder-cli        # or: uv tool install yonder-cli
 go install github.com/dpologdvinity/yonder@latest
 ```
 
-Or download a binary, `.deb`, `.rpm` or Arch package from [Releases](https://github.com/dpologdvinity/yonder/releases).
+Or download a binary, `.deb`, `.rpm` or Arch package from [Releases](https://github.com/dpologdvinity/yonder/releases). Every release lists the SHA-256 of each file in `checksums.txt`.
 
-## Usage
+## Quick start
 
-```
-yonder <port>             share localhost:<port> on the LAN
-yonder <path>             share a file or folder
-yonder <folder> --upload  also let other devices send files into the folder
-yonder <port> --listen N  use proxy port N
-yonder <port> --open      share without the access token
-yonder --version
-```
+1. Start your site as usual, for example on port 3000.
+2. Run `yonder 3000`.
+3. Scan the QR code with the other device, or type the link it prints into a browser.
+4. Press Ctrl-C when you are done. The link stops working at once.
 
 ```
 $ yonder 3000
@@ -77,16 +76,38 @@ yonder: sharing localhost:3000
   <QR code>
 
 Only people with this link or QR code can open it.
+
+14:03:09  device connected  192.168.1.42
+14:03:09  GET /  200  192.168.1.42
 ```
 
-Scan the QR code or type the URL on the other device. Each request shows up as one log line.
+The other device must be on the same network as your computer. If it cannot connect, see [Known limitations](#known-limitations) and [Firewalls](#firewalls).
 
-yonder runs a small proxy in front of your dev server, so you don't need to change its config:
+## Usage
+
+```
+yonder <port>               share the site running on localhost:<port>
+yonder <path>               share a file or a folder
+yonder <folder> --upload    also let other devices send files into the folder
+yonder <target> --open      share without the secret token (trusted networks only)
+yonder <target> --listen N  use N as the public port
+yonder --version            print the version
+```
+
+| Option | What it does |
+|---|---|
+| `--listen N` | Uses port `N` for other devices. By default yonder uses the shared port plus 10000 (`3000` becomes `13000`), or 18000 when sharing files, so the link keeps the same port across restarts. If that port is busy, yonder picks a free one. With `--listen`, a busy port is an error. |
+| `--open` | Turns the secret token off. Anyone on the network can open the link. |
+| `--upload` | Lets other devices send files into a shared folder. Folders only. |
+| `--version`, `--help` | Print the version, or the usage text. |
+
+The terminal shows one line when a device first connects, and one line per request with the time, method, path, status and visitor address.
+
+yonder runs a small proxy in front of your dev server, so you do not need to change its configuration:
 
 - It works with servers that only listen on `127.0.0.1` or `::1`.
 - It rewrites the `Host` and `Origin` headers, so servers that check them (Vite, webpack, Next.js) accept the request.
 - Hot reload keeps working: WebSockets and server-sent events pass through.
-- The proxy port is your port + 10000, so it stays the same across restarts (handy for firewall rules). The access token does not: after a restart, scan the new QR code.
 
 ## Share files
 
@@ -95,28 +116,49 @@ yonder ./photos        # a folder: the phone gets a list of files to tap and dow
 yonder notes.pdf       # one file: nothing else in its folder is reachable
 ```
 
-Same QR code and token as port sharing. The default port is 18000.
+The link, QR code and token work the same as when sharing a port.
 
 - Hidden files and folders (`.env`, `.git`, `.ssh`, anything starting with `.`) are never listed or served.
-- Symlinks inside the shared folder are skipped, and `..` can't reach outside it.
+- Symlinks inside the shared folder are skipped, and `..` cannot reach outside it.
+- Folder pages show the first 5000 entries, alphabetically, with folders first.
 - Share a dedicated folder, not your home directory.
-- Add `--upload` to let the other device send files into the folder: the page gets an Upload button (on a phone it opens the photo picker or Files). Existing files are never overwritten (`photo (1).jpg`), folder parts of a name are dropped (`../../x.txt` is saved as `x.txt`), hidden names are refused, and one upload is capped at 4 GB. Uploads are off unless you pass the flag.
+- Add `--upload` to let the other device send files into the folder: the page gets an Upload button (on a phone it opens the photo picker or Files). Existing files are never overwritten (`photo (1).jpg`), folder parts of a name are dropped (`../../x.txt` is saved as `x.txt`), hidden names are refused, and one upload is capped at 4 GB. Uploads are off unless you pass the flag. With uploads on, shared pages cannot run script (see [Is it safe?](#is-it-safe)).
 - A folder named like a number is a port to yonder: use `yonder ./3000`.
+
+## How it works
+
+yonder is one program with no dependencies on the other device. It opens a server on all of your network interfaces and puts two things in front of what you share: the access gate and a request log.
+
+```
+phone ──▶ your computer, port 13000 ──▶ log ──▶ access gate ──┬──▶ proxy ──▶ your dev server (localhost:3000)
+                                                              └──▶ file server ──▶ the shared folder
+```
+
+- The **access gate** only lets a request through if it carries the secret token: in the link on the first visit, in a cookie after that.
+- The **proxy** forwards the request to your dev server and rewrites headers so the dev server believes the request came from `localhost`.
+- The **file server** lists and serves a folder, and receives uploads, using only operating-system calls that cannot leave that folder.
+
+[ARCHITECTURE.md](ARCHITECTURE.md) explains each part, the security design, and why it was built this way.
 
 ## Is it safe?
 
-The link and QR code carry a secret token. Anyone without it gets a 403 and never reaches your app. The first visit swaps the token for a cookie, so it disappears from the address bar. Every restart makes a new token, which cuts off old links. Only the one port you name is shared.
+The link and QR code carry a secret token. Anyone without it gets a 403 and never reaches your app. The first visit swaps the token for a cookie, so it disappears from the address bar. Every restart makes a new token, which cuts off old links. Only the one port, file or folder you name is shared.
 
 - `--open` turns the token off. Use it only on networks you trust.
 - yonder speaks plain HTTP. On open (passwordless) Wi-Fi, or on WPA2 Wi-Fi with a shared password, others on the network can capture traffic and copy the token or cookie. Avoid sharing private data there. Enterprise Wi-Fi with per-user logins and WPA3 protect each device's traffic.
+- With `--upload`, files that are served carry a sandbox policy, so a web page someone uploaded cannot run script on your computer's address. This also means an HTML site shared from an upload-enabled folder will not run its scripts.
 - Stop sharing with Ctrl-C.
+
+To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## Known limitations
 
 - Your app's own code may hardcode `localhost`. A frontend calling an API at `http://localhost:8080` fails on the phone, because there `localhost` is the phone. Use relative API URLs or your dev server's proxy.
 - Response bodies are not rewritten. Absolute `http://localhost:<port>` links inside HTML or JS stay broken.
-- `http://localhost` counts as a secure context; `http://192.168.x.x` does not. Service workers, camera, geolocation, clipboard and `crypto.subtle` won't work on the other device yet.
-- Guest, campus and café networks often block device-to-device traffic. If the other device can't connect, try a phone hotspot.
+- `http://localhost` counts as a secure context; `http://192.168.x.x` does not. Service workers, camera, geolocation, clipboard and `crypto.subtle` do not work on the other device yet.
+- Guest, campus and café networks sometimes block device-to-device traffic. If the other device cannot connect, try a phone hotspot.
+- yonder only shares on private networks (`10.x`, `172.16-31.x`, `192.168.x`). Some networks give every computer a public address; there yonder stops with a message instead of putting your site on the internet.
+- Cookies do not include the port, so another web service on the same IP address receives yonder's cookie.
 
 ## Firewalls
 
@@ -126,11 +168,11 @@ The first time yonder listens for connections, your OS may block or ask:
 - **macOS:** allow incoming connections when the application firewall asks.
 - **WSL (mirrored mode):** the Hyper-V firewall blocks inbound traffic to WSL by default, so the other device times out. See the WSL section below.
 
-If the other device can't connect, watch yonder's output. No `device connected` line means the connection never reached yonder: a firewall or the network dropped it.
+If the other device cannot connect, watch yonder's output. No `device connected` line means the connection never reached yonder: a firewall or the network dropped it.
 
 ## WSL
 
-In WSL's default NAT mode, other devices can't reach WSL at all; yonder prints a hint when it detects this. Either set `networkingMode=mirrored` under `[wsl2]` in `%UserProfile%\.wslconfig` and run `wsl --shutdown`, or run the Windows build, `yonder.exe`.
+In WSL's default NAT mode, other devices cannot reach WSL at all; yonder prints a hint when it detects this. Either set `networkingMode=mirrored` under `[wsl2]` in `%UserProfile%\.wslconfig` and run `wsl --shutdown`, or run the Windows build, `yonder.exe`.
 
 In mirrored mode, open yonder's port once in an **admin** PowerShell. For `yonder 8000` the port is 18000:
 
@@ -141,6 +183,15 @@ New-NetFirewallRule -DisplayName yonder -Direction Inbound -Protocol TCP -LocalP
 
 Remove them later with `Remove-NetFirewallHyperVRule -Name yonder` and `Remove-NetFirewallRule -DisplayName yonder`.
 
+## Documentation
+
+| Document | What is in it |
+|---|---|
+| [ARCHITECTURE.md](ARCHITECTURE.md) | How yonder is built: components, request flow, security design, decisions, testing and releases |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Set up a development environment, run the checks, and send a change |
+| [SECURITY.md](SECURITY.md) | How to report a vulnerability, and what yonder does and does not protect against |
+| [CHANGELOG.md](CHANGELOG.md) | What changed in each release |
+
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE).
