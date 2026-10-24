@@ -90,6 +90,8 @@ yonder <port>               share the site running on localhost:<port>
 yonder <path>               share a file or a folder
 yonder <folder> --upload    also let other devices send files into the folder
 yonder <target> --open      share without the secret token (trusted networks only)
+yonder <target> --for 30m   stop sharing after 30 minutes (also 2h, 1d; at most 7d)
+yonder <target> --approve   allow each new device yourself, at the terminal
 yonder <target> --listen N  use N as the public port
 yonder --version            print the version
 ```
@@ -97,6 +99,8 @@ yonder --version            print the version
 | Option | What it does |
 |---|---|
 | `--listen N` | Uses port `N` for other devices. By default yonder uses the shared port plus 10000 (`3000` becomes `13000`), or 18000 when sharing files, so the link keeps the same port across restarts. If that port is busy, yonder picks a free one. With `--listen`, a busy port is an error. |
+| `--for TIME` | Stops sharing after `TIME`, such as `90s`, `30m`, `2h` or `1d` (more than zero, at most `7d`). yonder prints when the link stops working, and at that time it says so and exits. Works with every other option. |
+| `--approve` | Asks you at the terminal before each new device is let in. See [Approve each device](#approve-each-device). Needs the token, so it cannot be combined with `--open`. |
 | `--open` | Turns the secret token off. Anyone on the network can open the link. |
 | `--upload` | Lets other devices send files into a shared folder. Folders only. |
 | `--version`, `--help` | Print the version, or the usage text. |
@@ -108,6 +112,23 @@ yonder runs a small proxy in front of your dev server, so you do not need to cha
 - It works with servers that only listen on `127.0.0.1` or `::1`.
 - It rewrites the `Host` and `Origin` headers, so servers that check them (Vite, webpack, Next.js) accept the request.
 - Hot reload keeps working: WebSockets and server-sent events pass through.
+
+## Approve each device
+
+On a network you do not fully trust, the link can leak: someone can photograph the QR code, or read the address over a shoulder. `--approve` adds a second lock. A device that opens the link waits on a page that reloads by itself, and you decide at the terminal:
+
+```
+$ yonder 3000 --approve
+...
+Allow Safari on an iPhone at 192.168.1.42:51000 to open this? [y/N] y
+Allowed.
+```
+
+- Answer `y` or `yes` to allow. Anything else, including Enter, refuses. A refused device stays refused until yonder restarts.
+- A device is a browser, not an address, so two people on the same Wi-Fi are asked about separately. Your own phone's browser is asked once; later visits go straight in.
+- At most 10 devices can wait at once; the rest are told to try again.
+- It needs a terminal to ask on, so it does not work with input redirected from a file.
+- Combine it with `--for` to share for a limited time, with each person approved: `yonder 3000 --for 1h --approve`.
 
 ## Share files
 
@@ -147,7 +168,8 @@ The link and QR code carry a secret token. Anyone without it gets a 403 and neve
 - `--open` turns the token off. Use it only on networks you trust.
 - yonder speaks plain HTTP. On open (passwordless) Wi-Fi, or on WPA2 Wi-Fi with a shared password, others on the network can capture traffic and copy the token or cookie. Avoid sharing private data there. Enterprise Wi-Fi with per-user logins and WPA3 protect each device's traffic.
 - With `--upload`, files that are served carry a sandbox policy, so a web page someone uploaded cannot run script on your computer's address. This also means an HTML site shared from an upload-enabled folder will not run its scripts.
-- Stop sharing with Ctrl-C.
+- Stop sharing with Ctrl-C, or share for a limited time with `--for`.
+- `--approve` makes a leaked link useless on its own: nobody gets in until you say so.
 
 To report a vulnerability, see [SECURITY.md](SECURITY.md).
 

@@ -30,7 +30,9 @@ yonder assumes that other devices on your network are **not trusted** and that *
 - an upload cannot write outside the shared folder, cannot overwrite an existing file, and cannot create a hidden file;
 - another website cannot make a browser upload files to you;
 - an uploaded web page cannot run script on yonder's address;
-- the token does not appear in logs or in `Referer` headers.
+- the token does not appear in logs or in `Referer` headers;
+- with `--approve`, a device that has the link still sees nothing until the owner allows it, and a device the owner refused stays refused for the rest of the run;
+- with `--for`, nothing is shared after the time is up.
 
 [ARCHITECTURE.md](ARCHITECTURE.md#7-security-design) explains how each of these is enforced and tested. A way around any of them is a vulnerability.
 

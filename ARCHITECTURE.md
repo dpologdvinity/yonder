@@ -48,7 +48,8 @@ All code is in one Go package, `main`, at the repository root. One file has one 
 | `target.go` | `findTarget`: which loopback address (`127.0.0.1` or `::1`) the dev server really listens on. |
 | `lan.go` | `systemLANAddrs` and `lanAddrs`: which address other devices should use, with virtual interfaces ranked last. |
 | `port.go` | `listen`: opens the public socket and picks its port (shared port plus 10000, with fallbacks). |
-| `auth.go` | The access gate `withAuth`, token creation, and the helpers that remove the token and cookie before a request moves on. |
+| `auth.go` | The access gate `withAuth` and `withAuthDevices`, token creation, and the helpers that remove the token and cookie before a request moves on. |
+| `approve.go` | Device approval for `--approve`: the table of devices, the questions asked at the terminal, and the description of a browser shown to the owner. |
 | `proxy.go` | The reverse proxy `newProxy`, the request log `withLog`, and the "device connected" notice. |
 | `files.go` | The file server `newFileServer`: listing page, downloads, and the rules about what may be served. |
 | `upload.go` | Receiving uploads: streaming to a hidden temporary file and moving it into place safely. |
@@ -88,12 +89,13 @@ parseArgs ──▶ choose what to share ──▶ find a network address ──
 
 1. **Arguments.** `parseArgs` accepts options before or after the target. A number is a port (1 to 65535); anything else is a path. `--upload` needs a folder.
 2. **Target.** For a port, `findTarget` checks which of `127.0.0.1` and `::1` accepts a connection. Node.js servers often listen on IPv6 only. For a path, `fileHandler` resolves symbolic links, checks the file name against the same rule the server uses, and opens an `os.Root` on the folder.
-3. **Address.** `systemLANAddrs` lists private IPv4 addresses. The one the operating system would use to reach the internet comes first; container, VM and VPN addresses go last. If there are none, `noAddrError` explains why.
-4. **Public port.** `listen` opens `0.0.0.0:<port>`. The default is the shared port plus 10000, so the link stays the same across restarts; if that is taken, the operating system picks a free port.
-5. **Handler chain.** See the next section.
-6. **Output.** The link, the QR code, the access warning, the uploads line and, on WSL in NAT mode, the fix.
-7. **Serving.** `http.Server` runs with a header timeout (against slow-connection attacks) and an idle timeout. There is deliberately no write timeout, because WebSockets and event streams are long-lived.
-8. **Shutdown.** On Ctrl-C, terminate or hang-up, `run` calls `Server.Close`, then waits up to three seconds for running uploads to remove their temporary files, and exits with code 0. `Close` is used instead of `Shutdown` because `Shutdown` waits for hijacked WebSocket connections that may never end.
+3. **Terminal.** With `--approve`, yonder checks that standard input is a real terminal, because the owner's answers come from it.
+4. **Address.** `systemLANAddrs` lists private IPv4 addresses. The one the operating system would use to reach the internet comes first; container, VM and VPN addresses go last. If there are none, `noAddrError` explains why.
+5. **Public port.** `listen` opens `0.0.0.0:<port>`. The default is the shared port plus 10000, so the link stays the same across restarts; if that is taken, the operating system picks a free port.
+6. **Handler chain.** See the next section. With `--approve`, a `deviceTable` is created and a goroutine starts asking the owner about each new device.
+7. **Output.** The link, the QR code, the access warning, the uploads and time-limit lines and, on WSL in NAT mode, the fix.
+8. **Serving.** `http.Server` runs with a header timeout (against slow-connection attacks) and an idle timeout. There is deliberately no write timeout, because WebSockets and event streams are long-lived.
+9. **Shutdown.** On Ctrl-C, terminate or hang-up, or when the `--for` time is up (the serving context has a deadline), `run` calls `Server.Close`, then waits up to three seconds for running uploads to remove their temporary files, and exits with code 0. `Close` is used instead of `Shutdown` because `Shutdown` waits for hijacked WebSocket connections that may never end.
 
 ## 5. How a request travels
 
@@ -167,6 +169,15 @@ With uploads on, every served file carries `X-Content-Type-Options: nosniff` and
 5. If anything fails, or the upload is cut off, the temporary file is removed. During shutdown, `waitUploads` gives running uploads up to three seconds to do that.
 6. On success the browser is redirected back to the listing (`303`).
 
+### Device approval (`approve.go`)
+
+With `--approve`, the cookie value is `<token>.<device id>` instead of the token alone. A device id is 128 random bits, made on a browser's first visit with a valid token, and a `deviceTable` stores its state (`pending`, `approved` or `denied`), the visitor's address and its `User-Agent`.
+
+- The first visit sets the cookie and redirects, as usual. Every later request is checked against the table: `approved` goes on to the app or file server; `pending` gets a `202` page that reloads every two seconds; `denied` gets `403`. A `POST` that carries the token on a first visit is never forwarded.
+- `runPrompts` reads the owner's answers from standard input, one device at a time in arrival order. `y` or `yes` approves; anything else, or the end of the input, refuses.
+- The text shown to the owner is built by `describeUserAgent` from fixed word lists only. A visitor chooses their `User-Agent`, so it is never printed as it arrived; this keeps terminal control sequences off the owner's screen.
+- At most 10 devices can be pending (`maxPendingDevices`), so a visitor with the link cannot flood the owner. Answers are final, and the table lives only as long as the run.
+
 ### Network address (`lan.go`, `port.go`, `target.go`, `wsl.go`)
 
 - `lanAddrs` keeps only private IPv4 addresses on interfaces that are up and not loopback, removes duplicates, and ranks them: the address of the default route first (unless its interface is virtual), then ordinary interfaces, then Docker, VM, VPN and point-to-point interfaces. Interface names are matched case-insensitively and include Windows names such as "vEthernet" and "OpenVPN TAP-Windows6".
@@ -182,6 +193,7 @@ yonder exposes part of your computer to a network. The design assumes that **oth
 |---|---|---|
 | A device on the network without the link | Read the shared site or files | Every request needs the token (128 bits, compared in constant time). Without it: `403`, and the app never sees the request. |
 | The same device after a restart | Reuse an old link or cookie | The token is new on every run. |
+| A device that has the link, when you used `--approve` | Get in before you allow it | A new device waits on a page until you answer at the terminal; the app never sees its requests. A refusal is final until restart. |
 | A device that has the link | Read anything outside what you shared | The proxy forwards only to the one port. The file server uses `os.Root`, refuses links, special files and hidden names. |
 | Someone who sees the link in a screenshot or terminal log | Learn the token from the log | The log redacts it. The address bar and `Referer` lose it after the first redirect. |
 | A website open in a browser on the network | Make the browser post into your folder or your app | Uploads check `Origin` and `Sec-Fetch-Site`. The cookie is `SameSite=Lax`. Redirects stay on the same site. |
@@ -189,6 +201,8 @@ yonder exposes part of your computer to a network. The design assumes that **oth
 | A file name | Escape the folder or overwrite a file | Only the base name is used; `O_EXCL` plus rename never replaces a file; `os.Root` blocks escapes. |
 | A slow or abandoned connection | Hold resources forever | Header timeout, idle timeout, a size cap per upload, and cleanup of half-written files. |
 | A leaked dev setup | Expose the whole computer | Only one port, file or folder is shared, and hidden files such as `.env` and `.git` never are. |
+
+**Limits of `--for`:** it stops the whole program, so nothing stays exposed after the time is up. It does not make the link single-use during that time.
 
 **Not protected:**
 
@@ -277,4 +291,4 @@ Lint and static checks: `gofmt`, `go vet` (also for Windows and macOS), `golangc
 | Change the address shown in the QR code | `lanAddrs` and `isVirtual` in `lan.go` |
 | Add an install channel | A new job or repository that downloads the release, and a section in this document and the README |
 
-Features that are planned but not built: expiring links (`--for`), approving each new device in the terminal (`--approve`), sharing over the internet, and HTTPS on the local network. Each would sit in the handler chain in section 5 and would need its own threat analysis in section 7.
+Features that are planned but not built: sharing over the internet and HTTPS on the local network. Each would sit in the handler chain in section 5 and would need its own threat analysis in section 7.
