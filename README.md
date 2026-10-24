@@ -2,6 +2,13 @@
 
 > your site, over yonder
 
+[![CI](https://github.com/dpologdvinity/yonder/actions/workflows/ci.yml/badge.svg)](https://github.com/dpologdvinity/yonder/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/dpologdvinity/yonder)](https://github.com/dpologdvinity/yonder/releases/latest)
+[![npm](https://img.shields.io/npm/v/yonder-cli?label=npm)](https://www.npmjs.com/package/yonder-cli)
+[![PyPI](https://img.shields.io/pypi/v/yonder-cli?label=PyPI)](https://pypi.org/project/yonder-cli/)
+[![Go version](https://img.shields.io/github/go-mod/go-version/dpologdvinity/yonder)](go.mod)
+[![License: MIT](https://img.shields.io/github/license/dpologdvinity/yonder)](LICENSE)
+
 yonder lets you open a website running on your own computer (`localhost`) from your phone, your iPad, or a friend's laptop on the same network. It can also share a file or a whole folder, and let the other device send files back. One command prints a link and a QR code. Nothing needs to be installed on the other device.
 
 ![yonder demo](docs/demo.gif)
