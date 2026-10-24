@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -115,6 +116,9 @@ func installFakeCloudflared(t *testing.T, behavior string) {
 	}
 	dir := t.TempDir()
 	name := "cloudflared"
+	if runtime.GOOS == "windows" {
+		name += ".exe" // LookPath only finds programs with an executable extension there
+	}
 	if err := os.Symlink(self, filepath.Join(dir, name)); err != nil {
 		t.Skip("cannot make a symbolic link here: ", err)
 	}
