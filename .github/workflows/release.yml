@@ -9,7 +9,8 @@
 # stored anywhere. The Homebrew, Scoop, apt, dnf and pacman repositories are separate
 # repositories that update themselves hourly from the GitHub release (see ARCHITECTURE.md).
 #
-# One-time owner setup (PyPI and npm trusted publishers) is described in STEPS-FOR-OWNER.md.
+# The one-time setup (the PyPI and npm trusted publishers) is done by the repository owner in the
+# PyPI and npm settings; ARCHITECTURE.md, section 10, explains what each one expects.
 
 name: release
 
