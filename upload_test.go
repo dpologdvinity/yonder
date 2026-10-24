@@ -20,9 +20,9 @@ func postFiles(h http.Handler, target string, parts ...part) *httptest.ResponseR
 	mw := multipart.NewWriter(&buf)
 	for _, p := range parts {
 		fw, _ := mw.CreateFormFile("file", p.name)
-		fw.Write([]byte(p.body))
+		_, _ = fw.Write([]byte(p.body))
 	}
-	mw.Close()
+	_ = mw.Close()
 	req := httptest.NewRequest("POST", target, &buf)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	rec := httptest.NewRecorder()
@@ -34,13 +34,13 @@ func postFiles(h http.Handler, target string, parts ...part) *httptest.ResponseR
 func uploadDir(t *testing.T) (string, *os.Root) {
 	t.Helper()
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "index.txt"), []byte("original"), 0o644)
-	os.Mkdir(filepath.Join(dir, "sub"), 0o755)
+	must(t, os.WriteFile(filepath.Join(dir, "index.txt"), []byte("original"), 0o644))
+	must(t, os.Mkdir(filepath.Join(dir, "sub"), 0o755))
 	root, err := os.OpenRoot(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { root.Close() })
+	t.Cleanup(func() { _ = root.Close() })
 	return dir, root
 }
 
@@ -157,7 +157,7 @@ func TestUploadTooLarge(t *testing.T) {
 
 func TestUploadHiddenFolderRefused(t *testing.T) {
 	dir, root := uploadDir(t)
-	os.Mkdir(filepath.Join(dir, ".git"), 0o755)
+	must(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
 	if rec := postFiles(newFileServer(root, "", true), "/.git/", part{"x.txt", "x"}); rec.Code != 404 {
 		t.Errorf("got %d, want 404", rec.Code)
 	}
@@ -172,8 +172,8 @@ func TestUploadCrossOriginRefused(t *testing.T) {
 		var buf bytes.Buffer
 		mw := multipart.NewWriter(&buf)
 		fw, _ := mw.CreateFormFile("file", "x.txt")
-		fw.Write([]byte("x"))
-		mw.Close()
+		_, _ = fw.Write([]byte("x"))
+		_ = mw.Close()
 		req := httptest.NewRequest("POST", "/", &buf)
 		req.Header.Set("Content-Type", mw.FormDataContentType())
 		for k, v := range hdr {
@@ -211,11 +211,11 @@ func TestUploadInProgressHidden(t *testing.T) {
 	release := make(chan struct{})
 	go func() {
 		fw, _ := mw.CreateFormFile("file", "slow.txt")
-		fw.Write([]byte("first half"))
+		_, _ = fw.Write([]byte("first half"))
 		<-release
-		fw.Write([]byte(" second half"))
-		mw.Close()
-		pw.Close()
+		_, _ = fw.Write([]byte(" second half"))
+		_ = mw.Close()
+		_ = pw.Close()
 	}()
 	req := httptest.NewRequest("POST", "/", pr)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
@@ -254,7 +254,7 @@ func TestUploadBadNamesAre400(t *testing.T) {
 }
 
 func TestUploadNameRejectsInvisibleText(t *testing.T) {
-	for _, name := range []string{"cod‮gpj.exe", "a\nb.txt", "x‏.txt", "t⁦.txt"} {
+	for _, name := range []string{"cod\u202egpj.exe", "a\nb.txt", "x\u200f.txt", "t\u2066.txt"} {
 		if _, ok := uploadName(name, false); ok {
 			t.Errorf("uploadName(%q) accepted", name)
 		}

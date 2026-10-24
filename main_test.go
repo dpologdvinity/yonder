@@ -59,7 +59,7 @@ func TestRunNothingListening(t *testing.T) {
 		t.Fatal(err)
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
-	ln.Close()
+	_ = ln.Close()
 
 	var out, errOut strings.Builder
 	if code := run([]string{fmt.Sprint(port)}, &out, &errOut, context.Background()); code != 1 {
@@ -94,7 +94,7 @@ func TestRunMissingPath(t *testing.T) {
 
 func TestFileHandlerSymlinkArg(t *testing.T) {
 	real := filepath.Join(t.TempDir(), "doc.txt")
-	os.WriteFile(real, []byte("doc"), 0o644)
+	must(t, os.WriteFile(real, []byte("doc"), 0o644))
 	link := filepath.Join(t.TempDir(), "link.txt")
 	if err := os.Symlink(real, link); err != nil {
 		t.Skip("symlinks not supported")
@@ -103,7 +103,7 @@ func TestFileHandlerSymlinkArg(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer closeRoot()
+	defer func() { _ = closeRoot() }()
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/doc.txt", nil))
 	if rec.Body.String() != "doc" {
@@ -113,7 +113,7 @@ func TestFileHandlerSymlinkArg(t *testing.T) {
 
 func TestFileHandlerRejectsDotfile(t *testing.T) {
 	p := filepath.Join(t.TempDir(), ".bashrc")
-	os.WriteFile(p, []byte("x"), 0o644)
+	must(t, os.WriteFile(p, []byte("x"), 0o644))
 	if _, _, _, err := fileHandler(p, false); err == nil || err.Error() != "this file name cannot be shared: "+p {
 		t.Errorf("err = %v, want hidden-file error", err)
 	}
@@ -121,7 +121,7 @@ func TestFileHandlerRejectsDotfile(t *testing.T) {
 
 func TestFileHandlerUploadNeedsFolder(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "a.txt")
-	os.WriteFile(p, []byte("x"), 0o644)
+	must(t, os.WriteFile(p, []byte("x"), 0o644))
 	if _, _, _, err := fileHandler(p, true); err == nil || err.Error() != "--upload needs a folder" {
 		t.Errorf("err = %v, want --upload needs a folder", err)
 	}

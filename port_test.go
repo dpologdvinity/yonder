@@ -18,7 +18,7 @@ func freeTargetPort(t *testing.T) int {
 			t.Fatal(err)
 		}
 		p := listenerPort(ln)
-		ln.Close()
+		_ = ln.Close()
 		if p+10000 > 65535 {
 			p -= 30000 // ephemeral ports are often above 55535
 		}
@@ -27,7 +27,7 @@ func freeTargetPort(t *testing.T) int {
 		}
 		probe, err := net.Listen("tcp", "0.0.0.0:"+strconv.Itoa(p+10000))
 		if err == nil {
-			probe.Close()
+			_ = probe.Close()
 			return p
 		}
 	}
@@ -41,7 +41,7 @@ func TestListenDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	if got := listenerPort(ln); got != p+10000 {
 		t.Errorf("got port %d, want %d", got, p+10000)
 	}
@@ -53,13 +53,13 @@ func TestListenDefaultBusy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer busy.Close()
+	defer func() { _ = busy.Close() }()
 
 	ln, err := listen(p, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	if got := listenerPort(ln); got == 0 || got == p+10000 {
 		t.Errorf("got port %d, want a fallback port", got)
 	}
@@ -70,7 +70,7 @@ func TestListenDefaultOverflow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	if got := listenerPort(ln); got == 0 || got == 70000 {
 		t.Errorf("got port %d, want a fallback port", got)
 	}
@@ -81,7 +81,7 @@ func TestListenExplicitBusy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer busy.Close()
+	defer func() { _ = busy.Close() }()
 	q := listenerPort(busy)
 
 	_, err = listen(3000, q)

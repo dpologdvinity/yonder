@@ -51,7 +51,7 @@ func fileFixture(t *testing.T) *os.Root {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { root.Close() })
+	t.Cleanup(func() { _ = root.Close() })
 	return root
 }
 
@@ -234,10 +234,10 @@ func TestFilesListingCap(t *testing.T) {
 	defer func() { maxListing = old }()
 	dir := t.TempDir()
 	for i := 0; i < 5; i++ {
-		os.WriteFile(filepath.Join(dir, fmt.Sprintf("f%d.txt", i)), []byte("x"), 0o644)
+		must(t, os.WriteFile(filepath.Join(dir, fmt.Sprintf("f%d.txt", i)), []byte("x"), 0o644))
 	}
 	root, _ := os.OpenRoot(dir)
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	body := getFile(newFileServer(root, "", false), "/", nil).Body.String()
 	if !strings.Contains(body, "this folder has more") || strings.Count(body, `href="./f`) != 3 {
 		t.Errorf("listing not capped at 3:\n%s", body)
@@ -250,13 +250,13 @@ func TestFilesCapCountsOnlyVisible(t *testing.T) {
 	defer func() { maxListing = old }()
 	dir := t.TempDir()
 	for i := 0; i < 4; i++ {
-		os.WriteFile(filepath.Join(dir, fmt.Sprintf(".hidden%d", i)), []byte("x"), 0o644)
+		must(t, os.WriteFile(filepath.Join(dir, fmt.Sprintf(".hidden%d", i)), []byte("x"), 0o644))
 	}
 	for i := 0; i < 3; i++ {
-		os.WriteFile(filepath.Join(dir, fmt.Sprintf("v%d.txt", i)), []byte("x"), 0o644)
+		must(t, os.WriteFile(filepath.Join(dir, fmt.Sprintf("v%d.txt", i)), []byte("x"), 0o644))
 	}
 	root, _ := os.OpenRoot(dir)
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	body := getFile(newFileServer(root, "", false), "/", nil).Body.String()
 	if strings.Contains(body, "has more") || strings.Count(body, `href="./v`) != 3 {
 		t.Errorf("hidden files wrongly counted toward the cap:\n%s", body)
@@ -269,11 +269,11 @@ func TestFilesSingleModeListsItsFileInBigFolder(t *testing.T) {
 	defer func() { maxListing = old }()
 	dir := t.TempDir()
 	for i := 0; i < 8; i++ {
-		os.WriteFile(filepath.Join(dir, fmt.Sprintf("a%d.txt", i)), []byte("x"), 0o644)
+		must(t, os.WriteFile(filepath.Join(dir, fmt.Sprintf("a%d.txt", i)), []byte("x"), 0o644))
 	}
-	os.WriteFile(filepath.Join(dir, "zzz-the-one.txt"), []byte("x"), 0o644)
+	must(t, os.WriteFile(filepath.Join(dir, "zzz-the-one.txt"), []byte("x"), 0o644))
 	root, _ := os.OpenRoot(dir)
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	body := getFile(newFileServer(root, "zzz-the-one.txt", false), "/", nil).Body.String()
 	if !strings.Contains(body, `href="./zzz-the-one.txt"`) || strings.Contains(body, "has more") {
 		t.Errorf("single-file listing lost its file:\n%s", body)
@@ -314,10 +314,10 @@ func TestFilesCapKeepsAlphabeticalFirst(t *testing.T) {
 	defer func() { maxListing = old }()
 	dir := t.TempDir()
 	for i := 39; i >= 0; i-- { // created in reverse, so disk order is not alphabetical
-		os.WriteFile(filepath.Join(dir, fmt.Sprintf("f%02d.txt", i)), []byte("x"), 0o644)
+		must(t, os.WriteFile(filepath.Join(dir, fmt.Sprintf("f%02d.txt", i)), []byte("x"), 0o644))
 	}
 	root, _ := os.OpenRoot(dir)
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	body := getFile(newFileServer(root, "", false), "/", nil).Body.String()
 	for _, want := range []string{">f00.txt<", ">f01.txt<", ">f02.txt<"} {
 		if !strings.Contains(body, want) {

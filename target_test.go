@@ -11,7 +11,7 @@ func TestFindTargetIPv4(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	port := ln.Addr().(*net.TCPAddr).Port
 
 	got, err := findTarget(port)
@@ -28,7 +28,7 @@ func TestFindTargetIPv6Only(t *testing.T) {
 	if err != nil {
 		t.Skip("no IPv6 loopback")
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	port := ln.Addr().(*net.TCPAddr).Port
 
 	got, err := findTarget(port)
@@ -46,7 +46,7 @@ func TestFindTargetNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
-	ln.Close()
+	_ = ln.Close()
 
 	_, err = findTarget(port)
 	if err == nil {

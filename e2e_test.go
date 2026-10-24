@@ -45,7 +45,7 @@ func buildBinary(t *testing.T) string {
 			binPath += ".exe"
 		}
 		if out, err := exec.Command("go", "build", "-o", binPath, ".").CombinedOutput(); err != nil {
-			buildErr = fmt.Errorf("build: %v\n%s", err, out)
+			buildErr = fmt.Errorf("build: %w\n%s", err, out)
 		}
 	})
 	if buildErr != nil {
@@ -58,7 +58,7 @@ func buildBinary(t *testing.T) string {
 // and returns the first printed URL matching urlPattern (%d is the listen port).
 func startYonder(t *testing.T, urlPattern string, extra ...string) (string, *exec.Cmd, chan error) {
 	t.Helper()
-	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "hello") }))
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, "hello") }))
 	t.Cleanup(up.Close)
 	return startYonderOn(t, fmt.Sprint(up.Listener.Addr().(*net.TCPAddr).Port), urlPattern, extra...)
 }
@@ -73,7 +73,7 @@ func startYonderOn(t *testing.T, target, urlPattern string, extra ...string) (st
 		t.Fatal(err)
 	}
 	listenPort := free.Addr().(*net.TCPAddr).Port
-	free.Close()
+	_ = free.Close()
 
 	args := append([]string{target, "--listen", fmt.Sprint(listenPort)}, extra...)
 	cmd := exec.Command(bin, args...)
@@ -83,7 +83,7 @@ func startYonderOn(t *testing.T, target, urlPattern string, extra ...string) (st
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { cmd.Process.Kill() })
+	t.Cleanup(func() { _ = cmd.Process.Kill() })
 
 	urlRe := regexp.MustCompile(fmt.Sprintf(urlPattern, listenPort))
 	found := make(chan string, 1)
@@ -104,11 +104,11 @@ func startYonderOn(t *testing.T, target, urlPattern string, extra ...string) (st
 	select {
 	case u := <-found:
 		return u, cmd, exited
-	case <-exited:
+	case err := <-exited:
 		if strings.Contains(stderr.String(), "no network connection found") {
 			t.Skip("no LAN address on this machine")
 		}
-		t.Fatalf("yonder exited early: %s", stderr.String())
+		t.Fatalf("yonder exited early (%v): %s", err, stderr.String())
 	case <-time.After(10 * time.Second):
 		t.Fatal("no URL printed within 10s")
 	}
@@ -121,7 +121,7 @@ func get(t *testing.T, client *http.Client, url string) (int, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(resp.Body)
 	return resp.StatusCode, string(body)
 }
@@ -141,7 +141,7 @@ func TestEndToEnd(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		return // no os.Interrupt delivery to child processes
 	}
-	cmd.Process.Signal(os.Interrupt)
+	_ = cmd.Process.Signal(os.Interrupt)
 	select {
 	case err := <-exited:
 		if err != nil {
@@ -188,13 +188,13 @@ func TestEndToEndUpload(t *testing.T) {
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 	fw, _ := mw.CreateFormFile("file", "phone.txt")
-	fw.Write([]byte("from phone"))
-	mw.Close()
+	_, _ = fw.Write([]byte("from phone"))
+	_ = mw.Close()
 	resp, err := client.Post(url[:strings.Index(url, "/?")]+"/", mw.FormDataContentType(), &buf)
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != 200 { // the 303 back to the listing was followed
 		t.Errorf("upload response = %d, want 200 after the redirect", resp.StatusCode)
 	}
@@ -227,7 +227,7 @@ func signalDuringUpload(t *testing.T, sig os.Signal) {
 	}
 	defer conn.Close()
 	body := "--B\r\nContent-Disposition: form-data; name=\"file\"; filename=\"big.bin\"\r\n\r\n0123456789"
-	fmt.Fprintf(conn, "POST / HTTP/1.1\r\nHost: %s\r\nCookie: yonder_%s=%s\r\nContent-Type: multipart/form-data; boundary=B\r\nContent-Length: 1000000\r\n\r\n%s",
+	_, _ = fmt.Fprintf(conn, "POST / HTTP/1.1\r\nHost: %s\r\nCookie: yonder_%s=%s\r\nContent-Type: multipart/form-data; boundary=B\r\nContent-Length: 1000000\r\n\r\n%s",
 		host, host[strings.LastIndex(host, ":")+1:], token, body)
 	deadline := time.Now().Add(3 * time.Second)
 	for {
@@ -241,7 +241,7 @@ func signalDuringUpload(t *testing.T, sig os.Signal) {
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	cmd.Process.Signal(sig)
+	_ = cmd.Process.Signal(sig)
 	select {
 	case err := <-exited:
 		if err != nil {

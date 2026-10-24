@@ -30,8 +30,16 @@ func setup(t *testing.T, upstream http.Handler, front frontFunc) (string, int) {
 	return fr.URL, addr.Port
 }
 
-// get sends a request to the proxy as if from a phone that used clientHost.
-func do(t *testing.T, method, url string, hdr http.Header) *http.Response {
+// reply is a response whose body has already been read and closed.
+type reply struct {
+	StatusCode int
+	Header     http.Header
+	Body       []byte
+}
+
+// open sends a request to the proxy as if from a phone that used clientHost and returns
+// the response with its body still open. The caller must close the body.
+func open(t *testing.T, method, url string, hdr http.Header) *http.Response {
 	t.Helper()
 	req, err := http.NewRequest(method, url, nil)
 	if err != nil {
@@ -46,8 +54,19 @@ func do(t *testing.T, method, url string, hdr http.Header) *http.Response {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { resp.Body.Close() })
 	return resp
+}
+
+// do is open for requests whose body is read in full: it returns the finished reply.
+func do(t *testing.T, method, url string, hdr http.Header) reply {
+	t.Helper()
+	resp := open(t, method, url, hdr)
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return reply{resp.StatusCode, resp.Header, body}
 }
 
 func TestProxyHostRewrite(t *testing.T) {
@@ -130,9 +149,9 @@ var echoUpgrade = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	defer conn.Close()
-	rw.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: echo\r\n\r\n")
-	rw.Flush()
-	io.Copy(conn, rw)
+	_, _ = rw.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: echo\r\n\r\n")
+	_ = rw.Flush()
+	_, _ = io.Copy(conn, rw)
 })
 
 func checkUpgrade(t *testing.T, front frontFunc) {
@@ -143,17 +162,18 @@ func checkUpgrade(t *testing.T, front frontFunc) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	fmt.Fprintf(conn, "GET / HTTP/1.1\r\nHost: %s\r\nConnection: Upgrade\r\nUpgrade: echo\r\n\r\n", clientHost)
+	_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
+	_, _ = fmt.Fprintf(conn, "GET / HTTP/1.1\r\nHost: %s\r\nConnection: Upgrade\r\nUpgrade: echo\r\n\r\n", clientHost)
 	br := bufio.NewReader(conn)
 	resp, err := http.ReadResponse(br, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusSwitchingProtocols {
 		t.Fatalf("status = %d, want 101", resp.StatusCode)
 	}
-	conn.Write([]byte("ping"))
+	_, _ = conn.Write([]byte("ping"))
 	buf := make([]byte, 4)
 	if _, err := io.ReadFull(br, buf); err != nil || string(buf) != "ping" {
 		t.Fatalf("echo = %q, %v; want ping", buf, err)
@@ -165,8 +185,8 @@ func checkSSE(t *testing.T, front frontFunc) {
 	done := make(chan struct{})
 	url, _ := setup(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		io.WriteString(w, "data: hi\n\n")
-		http.NewResponseController(w).Flush()
+		_, _ = io.WriteString(w, "data: hi\n\n")
+		_ = http.NewResponseController(w).Flush()
 		select {
 		case <-done:
 		case <-r.Context().Done():
@@ -174,7 +194,8 @@ func checkSSE(t *testing.T, front frontFunc) {
 	}), front)
 	defer close(done)
 
-	resp := do(t, "GET", url, nil)
+	resp := open(t, "GET", url, nil)
+	defer func() { _ = resp.Body.Close() }()
 	line := make(chan string, 1)
 	go func() {
 		s, _ := bufio.NewReader(resp.Body).ReadString('\n')
@@ -199,13 +220,13 @@ func TestProxyUpstreamRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	addr := ln.Addr().(*net.TCPAddr)
-	ln.Close()
+	_ = ln.Close()
 	fr := httptest.NewServer(newProxy(addr.String(), addr.Port))
 	defer fr.Close()
 
 	// Warm a keep-alive connection to the first upstream, then take it down.
 	first := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-	first.Listener.Close()
+	_ = first.Listener.Close()
 	first.Listener, _ = net.Listen("tcp", addr.String())
 	first.Start()
 	if resp := do(t, "GET", fr.URL, nil); resp.StatusCode != 200 {
@@ -214,9 +235,8 @@ func TestProxyUpstreamRestart(t *testing.T) {
 	first.Close()
 
 	resp := do(t, "GET", fr.URL, nil)
-	body, _ := io.ReadAll(resp.Body)
-	if want := fmt.Sprintf("yonder: localhost:%d is not responding\n", addr.Port); resp.StatusCode != 502 || string(body) != want {
-		t.Fatalf("down: got %d %q, want 502 %q", resp.StatusCode, body, want)
+	if want := fmt.Sprintf("yonder: localhost:%d is not responding\n", addr.Port); resp.StatusCode != 502 || string(resp.Body) != want {
+		t.Fatalf("down: got %d %q, want 502 %q", resp.StatusCode, resp.Body, want)
 	}
 
 	ln, err = net.Listen("tcp", addr.String())
@@ -224,8 +244,8 @@ func TestProxyUpstreamRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})}
-	go srv.Serve(ln)
-	defer srv.Close()
+	go func() { _ = srv.Serve(ln) }()
+	defer func() { _ = srv.Close() }()
 
 	if resp := do(t, "GET", fr.URL, nil); resp.StatusCode != 200 {
 		t.Fatalf("back up: got %d, want 200", resp.StatusCode)
@@ -282,7 +302,7 @@ func TestWithLogAbortedHandlerStillLogs(t *testing.T) {
 	h := withLog(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { panic(http.ErrAbortHandler) }), &log, now)
 
 	func() {
-		defer func() { recover() }()
+		defer func() { _ = recover() }()
 		req := httptest.NewRequest("GET", "/stream", nil)
 		h.ServeHTTP(httptest.NewRecorder(), req)
 	}()
@@ -353,7 +373,7 @@ func TestWithLogKeepsSendfile(t *testing.T) {
 	var log strings.Builder
 	w := &readFromWriter{ResponseRecorder: *httptest.NewRecorder()}
 	h := withLog(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		io.CopyN(w, strings.NewReader("file bytes"), 10) // the path http.ServeContent takes
+		_, _ = io.CopyN(w, strings.NewReader("file bytes"), 10) // the path http.ServeContent takes
 	}), &log, time.Now)
 	h.ServeHTTP(w, httptest.NewRequest("GET", "/f", nil))
 	if w.readFromCalls != 1 {

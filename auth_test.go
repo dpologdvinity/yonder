@@ -176,7 +176,7 @@ func TestAuthRedirectKeepsEncodedPath(t *testing.T) {
 func TestAuthNoReferrerBeatsUpstreamPolicy(t *testing.T) {
 	up := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Referrer-Policy", "unsafe-url")
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
 	})
 	req := httptest.NewRequest("POST", "/api?yonder=T0K", nil)
 	rec := httptest.NewRecorder()
