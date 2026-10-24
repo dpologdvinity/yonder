@@ -5,8 +5,6 @@ package main
 import (
 	"fmt"
 	"net"
-	"os"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -105,15 +103,13 @@ func TestListenExplicitBusy(t *testing.T) {
 	}
 }
 
-// TestListenExplicitOtherError checks that a --listen port that fails for a reason other
-// than "in use" (here: a privileged port, as a normal user) reports the real cause and not
-// the misleading "is in use" message.
+// TestListenExplicitOtherError checks that a --listen port that fails for a reason other than
+// "in use" (here: a port number that does not exist) reports the real cause and not the
+// misleading "is in use" message. An invalid port fails the same way on every operating
+// system, unlike a privileged one, which macOS lets ordinary users open.
 func TestListenExplicitOtherError(t *testing.T) {
-	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
-		t.Skip("ports below 1024 are open to this user")
-	}
-	_, err := listen(3000, 1)
-	if err == nil || strings.Contains(err.Error(), "in use") || !strings.Contains(err.Error(), "cannot listen on port 1") {
-		t.Errorf("err = %v, want 'cannot listen on port 1: ...'", err)
+	_, err := listen(3000, 70000)
+	if err == nil || strings.Contains(err.Error(), "in use") || !strings.Contains(err.Error(), "cannot listen on port 70000") {
+		t.Errorf("err = %v, want 'cannot listen on port 70000: ...'", err)
 	}
 }
