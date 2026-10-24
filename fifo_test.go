@@ -4,7 +4,6 @@ package main
 
 import (
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -31,5 +30,4 @@ func TestFilesSkipsSpecialFiles(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("request for a FIFO blocked")
 	}
-	_ = os.Remove
 }

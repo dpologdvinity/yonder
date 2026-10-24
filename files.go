@@ -22,7 +22,7 @@ var listingTmpl = template.Must(template.New("list").Parse(`<!doctype html>
 <style>body{font:16px system-ui,sans-serif;margin:1rem}a{display:block;padding:.6rem 0;border-bottom:1px solid #ddd;text-decoration:none}span{float:right;color:#777}</style>
 </head><body><h1>{{.Title}}</h1>
 {{if .Upload}}<form method="post" enctype="multipart/form-data" data-max="{{.MaxUpload}}"><input type="file" name="file" multiple> <button>Upload</button></form>
-<script>document.querySelectorAll('form[data-max]').forEach(f=>f.addEventListener('submit',e=>{let t=0;for(const x of f.file.files)t+=x.size;if(t>+f.dataset.max){e.preventDefault();alert('These files are too large to upload (limit '+(f.dataset.max/2**30)+' GB per upload).')}}))</script>
+<script>document.querySelectorAll('form[data-max]').forEach(f=>f.addEventListener('submit',e=>{let t=4096;for(const x of f.file.files)t+=x.size+1024;if(t>+f.dataset.max){e.preventDefault();alert('These files are too large to upload (limit '+(+(f.dataset.max/2**30).toFixed(2))+' GB per upload).')}}))</script>
 {{end}}{{if .Truncated}}<p>Showing {{.Cap}} items; this folder has more.</p>
 {{end}}{{range .Entries}}<a href="{{.Href}}">{{.Name}}{{if .Size}}<span>{{.Size}}</span>{{end}}</a>
 {{end}}</body></html>
@@ -32,6 +32,10 @@ var crossOrigin = http.NewCrossOriginProtection()
 
 // maxListing caps one folder listing. A var so tests can lower it.
 var maxListing = 5000
+
+// scanLimit bounds how many entries one request reads from a folder, so a folder with
+// millions of files cannot make the listing page use unbounded time or memory.
+const scanLimit = 100000
 
 type listEntry struct{ Name, Href, Size string }
 
@@ -140,7 +144,7 @@ func serveListing(w http.ResponseWriter, root *os.Root, rel, only, title string,
 	default:
 		// Read in batches and count only entries we will show, so hidden files and links
 		// never eat the cap.
-		for len(visible) <= maxListing {
+		for len(visible) <= scanLimit {
 			batch, err := dir.ReadDir(512)
 			for _, e := range batch {
 				if visibleName(e.Name(), runtime.GOOS == "windows") && (e.IsDir() || e.Type().IsRegular()) {
@@ -156,16 +160,17 @@ func serveListing(w http.ResponseWriter, root *os.Root, rel, only, title string,
 			}
 		}
 	}
-	truncated := len(visible) > maxListing
-	if truncated {
-		visible = visible[:maxListing]
-	}
+	// Sort first, then cut: the page shows the alphabetically first entries, folders first.
 	sort.Slice(visible, func(i, j int) bool {
 		if visible[i].IsDir() != visible[j].IsDir() {
 			return visible[i].IsDir()
 		}
 		return visible[i].Name() < visible[j].Name()
 	})
+	truncated := len(visible) > maxListing
+	if truncated {
+		visible = visible[:maxListing]
+	}
 
 	var list []listEntry
 	for _, e := range visible {
@@ -196,14 +201,13 @@ func humanSize(n int64) string {
 	if n < 1024 {
 		return fmt.Sprintf("%d B", n)
 	}
-	f, units := float64(n), []string{"KB", "MB", "GB", "TB"}
-	for i := range units {
+	units := []string{"KB", "MB", "GB", "TB"}
+	f, i := float64(n)/1024, 0
+	for f >= 1024 && i < len(units)-1 {
 		f /= 1024
-		if f < 1024 || i == len(units)-1 {
-			return fmt.Sprintf("%.1f %s", f, units[i])
-		}
+		i++
 	}
-	return ""
+	return fmt.Sprintf("%.1f %s", f, units[i])
 }
 
 // safeRel turns a URL path into a root-relative name, refusing hidden segments and

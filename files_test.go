@@ -80,8 +80,9 @@ func TestFilesListing(t *testing.T) {
 			t.Errorf("listing lacks %q:\n%s", want, body)
 		}
 	}
-	if strings.Index(body, "sub/") > strings.Index(body, "index.txt") {
-		t.Error("folders should be listed before files")
+	sub, idx := strings.Index(body, ">sub/<"), strings.Index(body, ">index.txt<")
+	if sub < 0 || idx < 0 || sub > idx {
+		t.Errorf("folders should be listed before files (sub/ at %d, index.txt at %d)", sub, idx)
 	}
 	for _, hidden := range []string{".env", ".git"} {
 		if strings.Contains(body, hidden) {
@@ -304,5 +305,26 @@ func TestVisibleName(t *testing.T) {
 		if got := visibleName(tt.name, tt.windows); got != tt.want {
 			t.Errorf("visibleName(%q, %v) = %v, want %v", tt.name, tt.windows, got, tt.want)
 		}
+	}
+}
+
+func TestFilesCapKeepsAlphabeticalFirst(t *testing.T) {
+	old := maxListing
+	maxListing = 3
+	defer func() { maxListing = old }()
+	dir := t.TempDir()
+	for i := 39; i >= 0; i-- { // created in reverse, so disk order is not alphabetical
+		os.WriteFile(filepath.Join(dir, fmt.Sprintf("f%02d.txt", i)), []byte("x"), 0o644)
+	}
+	root, _ := os.OpenRoot(dir)
+	defer root.Close()
+	body := getFile(newFileServer(root, "", false), "/", nil).Body.String()
+	for _, want := range []string{">f00.txt<", ">f01.txt<", ">f02.txt<"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("capped listing lacks %s:\n%s", want, body)
+		}
+	}
+	if strings.Count(body, `href="./f`) != 3 {
+		t.Errorf("want exactly 3 entries:\n%s", body)
 	}
 }
