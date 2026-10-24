@@ -5,3 +5,5 @@ npm/bin/yonder
 npm/bin/yonder.exe
 npm/*.tgz
 .env
+__pycache__/
+*.pyc
