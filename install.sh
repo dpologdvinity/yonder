@@ -47,7 +47,10 @@ main() {
   else
     echo "yonder: need sha256sum or shasum to verify the download" >&2; exit 1
   fi
-  [ -n "$want" ] && [ "$want" = "$got" ] || { echo "yonder: checksum mismatch for $file" >&2; exit 1; }
+  if [ -z "$want" ] || [ "$want" != "$got" ]; then
+    echo "yonder: checksum mismatch for $file" >&2
+    exit 1
+  fi
 
   tar -xzf "$tmp/$file" -C "$tmp" yonder
 
