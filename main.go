@@ -46,9 +46,19 @@ var version = "dev"
 // init fills version from the module's build information when the binary was built without
 // goreleaser, for example by "go install github.com/dpologdvinity/yonder@latest".
 func init() {
-	if bi, ok := debug.ReadBuildInfo(); ok && version == "dev" && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
-		version = strings.TrimPrefix(bi.Main.Version, "v")
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		version = versionFromBuildInfo(version, bi.Main.Version)
 	}
+}
+
+// versionFromBuildInfo returns the version to report. A version that goreleaser already set
+// wins; otherwise the module version is used, without its leading "v". Local builds, whose
+// module version is empty or "(devel)", keep "dev".
+func versionFromBuildInfo(current, module string) string {
+	if current != "dev" || module == "" || module == "(devel)" {
+		return current
+	}
+	return strings.TrimPrefix(module, "v")
 }
 
 // usage is the help text. It is printed to stdout for --help and to stderr, after the reason,
