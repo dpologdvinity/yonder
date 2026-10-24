@@ -318,10 +318,48 @@ func TestConnLoggerFirstConnectionPerDevice(t *testing.T) {
 }
 
 func TestWithLogHidesToken(t *testing.T) {
+	for _, uri := range []string{
+		"/a?x=1&yonder=SECRET&y=2",
+		"/a?%79onder=SECRET&x=1", // percent-encoded name
+		"/a?a;yonder=SECRET",     // malformed query that never authenticates
+		"/a?x=1&YONDER=SECRET",
+	} {
+		var log strings.Builder
+		h := withLog(http.NotFoundHandler(), &log, time.Now)
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", uri, nil))
+		if strings.Contains(log.String(), "SECRET") {
+			t.Errorf("%s: token reached the log: %q", uri, log.String())
+		}
+	}
 	var log strings.Builder
-	h := withLog(http.NotFoundHandler(), &log, time.Now)
-	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/a?x=1&yonder=SECRET&y=2", nil))
-	if strings.Contains(log.String(), "SECRET") || !strings.Contains(log.String(), "/a?x=1&yonder=…&y=2") {
-		t.Errorf("log = %q, want the token replaced by …", log.String())
+	withLog(http.NotFoundHandler(), &log, time.Now).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/a?x=1&yonder=S&y=2", nil))
+	if !strings.Contains(log.String(), "GET /a?x=1&y=2  404") {
+		t.Errorf("log = %q, want the other parameters kept", log.String())
+	}
+}
+
+// readFromWriter records whether the response writer's ReadFrom (sendfile) was used.
+type readFromWriter struct {
+	httptest.ResponseRecorder
+	readFromCalls int
+}
+
+func (w *readFromWriter) ReadFrom(r io.Reader) (int64, error) {
+	w.readFromCalls++
+	return io.Copy(&w.ResponseRecorder, r)
+}
+
+func TestWithLogKeepsSendfile(t *testing.T) {
+	var log strings.Builder
+	w := &readFromWriter{ResponseRecorder: *httptest.NewRecorder()}
+	h := withLog(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.CopyN(w, strings.NewReader("file bytes"), 10) // the path http.ServeContent takes
+	}), &log, time.Now)
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/f", nil))
+	if w.readFromCalls != 1 {
+		t.Errorf("underlying ReadFrom called %d times, want 1 (downloads lose sendfile)", w.readFromCalls)
+	}
+	if !strings.Contains(log.String(), "GET /f  200") {
+		t.Errorf("log = %q, want status 200", log.String())
 	}
 }

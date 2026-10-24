@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 )
 
@@ -61,6 +62,9 @@ func withAuth(h http.Handler, token string, listenPort int) http.Handler {
 				return
 			}
 		}
+		if viaQuery {
+			w = noReferrerWriter{w} // a POST keeps the token in the address bar
+		}
 		h.ServeHTTP(w, out)
 	})
 }
@@ -110,14 +114,31 @@ func isYonderCookie(name string) bool {
 	return true
 }
 
-// redactParam replaces the value of every name=value pair called name with "…", for logs.
-func redactParam(rawQuery, name string) string {
-	parts := strings.Split(rawQuery, "&")
-	for i, part := range parts {
-		key, _, found := strings.Cut(part, "=")
-		if k, err := url.QueryUnescape(key); found && err == nil && k == name {
-			parts[i] = key + "=…"
-		}
-	}
-	return strings.Join(parts, "&")
+// looseTokenRe finds a "yonder=..." pair even in a malformed query that Go's parser
+// would reject (for example "a;yonder=T"). Such a request never authenticates, but its
+// text must still stay out of the log.
+var looseTokenRe = regexp.MustCompile(`(?i)(^|[&;])` + tokenParam + `=[^&;]*`)
+
+// redactToken returns rawQuery without any share token, for the terminal log.
+func redactToken(rawQuery string) string {
+	q := dropParam(rawQuery, tokenParam)
+	q = looseTokenRe.ReplaceAllString(q, "$1")
+	return strings.Trim(strings.ReplaceAll(q, "&&", "&"), "&;")
 }
+
+// noReferrerWriter forces "Referrer-Policy: no-referrer" on the response, replacing
+// any policy the app sets, so the token in the address bar cannot leak through Referer.
+type noReferrerWriter struct{ http.ResponseWriter }
+
+func (w noReferrerWriter) WriteHeader(code int) {
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w noReferrerWriter) Write(b []byte) (int, error) {
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	return w.ResponseWriter.Write(b)
+}
+
+// Unwrap lets http.ResponseController reach Flush and Hijack on the real writer.
+func (w noReferrerWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }

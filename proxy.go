@@ -97,7 +97,7 @@ func withLog(h http.Handler, w io.Writer, now func() time.Time) http.Handler {
 				ip = r.RemoteAddr
 			}
 			u := *r.URL
-			u.RawQuery = redactParam(u.RawQuery, tokenParam) // the share token must not reach the terminal log
+			u.RawQuery = redactToken(u.RawQuery) // the share token must not reach the terminal log
 			fmt.Fprintf(w, "%s  %s %s  %d  %s\n", start.Format("15:04:05"), r.Method, u.RequestURI(), rec.status, ip)
 		}()
 		h.ServeHTTP(rec, r)
@@ -116,11 +116,13 @@ func (s *statusRecorder) WriteHeader(code int) {
 	s.ResponseWriter.WriteHeader(code)
 }
 
-func (s *statusRecorder) Write(b []byte) (int, error) {
-	if s.status == 0 {
-		s.status = http.StatusOK
+// ReadFrom keeps the OS fast path for file downloads. Wrapping a ResponseWriter hides its
+// ReadFrom method, and http.ServeContent only uses sendfile when it finds one.
+func (s *statusRecorder) ReadFrom(r io.Reader) (int64, error) {
+	if rf, ok := s.ResponseWriter.(io.ReaderFrom); ok {
+		return rf.ReadFrom(r)
 	}
-	return s.ResponseWriter.Write(b)
+	return io.Copy(struct{ io.Writer }{s.ResponseWriter}, r) // hide ReadFrom to avoid recursing into ourselves
 }
 
 // Hijack is only called for protocol upgrades, which ReverseProxy answers with 101 on the raw conn.
