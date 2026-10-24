@@ -1,0 +1,26 @@
+# golangci-lint configuration (v2). Run locally with `golangci-lint run ./...`; CI runs the same.
+version: "2"
+
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    - bodyclose  # HTTP response bodies in tests must be closed
+    - errorlint  # compare errors with errors.Is/As, wrap with %w
+    - misspell   # typos in code and comments
+    - unconvert  # needless type conversions
+  settings:
+    errcheck:
+      exclude-functions:
+        # Closing a handle we only read from cannot lose data, so the error is not actionable.
+        # Writers (see saveUnique in upload.go) check their Close error explicitly.
+        - (*os.File).Close
+        - (net.Conn).Close
+
+formatters:
+  enable:
+    - gofmt
+
+issues:
+  # Report every finding, not just the first 50 of each kind.
+  max-issues-per-linter: 0
+  max-same-issues: 0
