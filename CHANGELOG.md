@@ -4,6 +4,8 @@ All notable changes to yonder are listed here. The format follows [Keep a Change
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-10-24
+
 ### Added
 - `ARCHITECTURE.md`, `CONTRIBUTING.md`, `SECURITY.md` and this changelog; a much fuller README.
 - A test that fails when any Go file lacks a header comment or any declaration lacks a doc comment; every file and declaration is now documented.
@@ -95,7 +97,8 @@ All notable changes to yonder are listed here. The format follows [Keep a Change
 - First release: `yonder <port>` shares a local site on the network with a link and QR code. A reverse proxy rewrites `Host`, `Origin`, redirects and cookies, passes WebSockets and event streams through, and works with servers that listen only on IPv6.
 - A stable default port (shared port plus 10000), a request log, and a hint for WSL in NAT mode.
 
-[Unreleased]: https://github.com/dpologdvinity/yonder/compare/v0.4.3...HEAD
+[Unreleased]: https://github.com/dpologdvinity/yonder/compare/v0.4.4...HEAD
+[0.4.4]: https://github.com/dpologdvinity/yonder/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/dpologdvinity/yonder/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/dpologdvinity/yonder/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/dpologdvinity/yonder/compare/v0.4.0...v0.4.1
