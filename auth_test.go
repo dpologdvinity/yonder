@@ -165,3 +165,10 @@ func TestAuthRedirectIgnoresOpaqueTarget(t *testing.T) {
 		t.Errorf("Location = %q", loc)
 	}
 }
+
+func TestAuthRedirectKeepsEncodedPath(t *testing.T) {
+	rec, _ := serveAuth("GET", "/a%2Fb?yonder=T0K&x=1", nil)
+	if got := rec.Header().Get("Location"); got != "/a%2Fb?x=1" {
+		t.Errorf("Location = %q, want /a%%2Fb?x=1", got)
+	}
+}

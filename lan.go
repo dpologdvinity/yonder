@@ -22,7 +22,7 @@ func lanAddrs(ifaces []iface, best net.IP) []net.IP {
 		if ifc.Flags&net.FlagUp == 0 || ifc.Flags&net.FlagLoopback != 0 {
 			continue
 		}
-		isBridge := isVirtual(ifc.Name)
+		isBridge := isVirtual(ifc.Name) || ifc.Flags&net.FlagPointToPoint != 0
 		for _, ip := range ifc.IPs {
 			ip4 := ip.To4()
 			if ip4 == nil || !ip4.IsPrivate() || seen[ip4.String()] {
@@ -51,8 +51,15 @@ func lanAddrs(ifaces []iface, best net.IP) []net.IP {
 
 // isVirtual reports container bridges, VM host-only networks and VPN tunnels.
 func isVirtual(name string) bool {
+	name = strings.ToLower(name)
 	for _, p := range []string{"docker", "br-", "veth", "vboxnet", "vmnet", "bridge", "tun", "utun", "tap", "wg", "ppp"} {
 		if strings.HasPrefix(name, p) {
+			return true
+		}
+	}
+	// Windows uses friendly names ("OpenVPN TAP-Windows6", "vEthernet (WSL)", "WireGuard Tunnel").
+	for _, p := range []string{"vethernet", "virtualbox", "vmware", "wireguard", "openvpn", "tailscale", "zerotier"} {
+		if strings.Contains(name, p) || strings.Contains(name, "tap-") {
 			return true
 		}
 	}

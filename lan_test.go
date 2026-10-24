@@ -46,6 +46,16 @@ func TestLanAddrs(t *testing.T) {
 			{"eth0", net.FlagUp, ips("192.168.1.5")},
 			{"vboxnet0", net.FlagUp, ips("192.168.56.1")},
 		}, net.ParseIP("10.8.0.2"), []string{"192.168.1.5", "10.8.0.2", "192.168.56.1"}},
+		{"windows names", []iface{
+			{"Ethernet", net.FlagUp, ips("192.168.1.5")},
+			{"OpenVPN TAP-Windows6", net.FlagUp, ips("10.8.0.2")},
+			{"vEthernet (WSL)", net.FlagUp, ips("172.30.1.1")},
+			{"WireGuard Tunnel", net.FlagUp, ips("10.9.0.2")},
+		}, net.ParseIP("10.8.0.2"), []string{"192.168.1.5", "10.8.0.2", "172.30.1.1", "10.9.0.2"}},
+		{"point-to-point is a tunnel", []iface{
+			{"Wi-Fi", net.FlagUp, ips("192.168.1.5")},
+			{"corp", net.FlagUp | net.FlagPointToPoint, ips("10.1.1.1")},
+		}, net.ParseIP("10.1.1.1"), []string{"192.168.1.5", "10.1.1.1"}},
 		{"best filtered out", ifs, net.ParseIP("10.255.255.254"), []string{"10.207.68.227", "172.17.0.1"}},
 		{"no interfaces", nil, nil, []string{}},
 		{"duplicate address", []iface{

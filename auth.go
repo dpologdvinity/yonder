@@ -53,8 +53,11 @@ func withAuth(h http.Handler, token string, listenPort int) http.Handler {
 			if r.Method == http.MethodGet || r.Method == http.MethodHead {
 				// One leading slash only: "//host" would be an open redirect.
 				// Built from Path and RawQuery only: RequestURI() would also include Opaque.
-				target := url.URL{Path: "/" + strings.TrimLeft(out.URL.Path, "/"), RawQuery: out.URL.RawQuery}
-				http.Redirect(w, r, target.RequestURI(), http.StatusFound)
+				target := "/" + strings.TrimLeft(out.URL.EscapedPath(), "/") // keeps %2F as the app sent it
+				if out.URL.RawQuery != "" {
+					target += "?" + out.URL.RawQuery
+				}
+				http.Redirect(w, r, target, http.StatusFound)
 				return
 			}
 		}

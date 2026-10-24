@@ -11,9 +11,26 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
+	"time"
 	"unicode"
 )
+
+// uploads counts requests still writing, so shutdown can wait for their cleanup.
+var uploads sync.WaitGroup
+
+// waitUploads waits for in-flight uploads, at most d. It reports whether they finished.
+func waitUploads(d time.Duration) bool {
+	done := make(chan struct{})
+	go func() { uploads.Wait(); close(done) }()
+	select {
+	case <-done:
+		return true
+	case <-time.After(d):
+		return false
+	}
+}
 
 // maxUpload caps one upload request. A var so tests can lower it.
 var maxUpload int64 = 4 << 30
@@ -21,6 +38,8 @@ var maxUpload int64 = 4 << 30
 // receiveUpload streams every "file" part into dir, never overwriting, then
 // sends the browser back to the folder listing.
 func receiveUpload(w http.ResponseWriter, r *http.Request, root *os.Root, dir, back string) {
+	uploads.Add(1)
+	defer uploads.Done()
 	r.Body = http.MaxBytesReader(w, r.Body, maxUpload)
 	mr, err := r.MultipartReader()
 	if err != nil {

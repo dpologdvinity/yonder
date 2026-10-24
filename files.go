@@ -52,7 +52,8 @@ func newFileServer(root *os.Root, only string, upload bool) http.Handler {
 				break
 			}
 			fi, err := root.Lstat(strings.Join(segs[:i+1], "/"))
-			if err != nil || fi.Mode()&fs.ModeSymlink != 0 {
+			// Only plain folders and files: no symlinks, junctions, FIFOs or devices.
+			if err != nil || !(fi.IsDir() || fi.Mode().IsRegular()) {
 				http.NotFound(w, r)
 				return
 			}
@@ -101,6 +102,12 @@ func newFileServer(root *os.Root, only string, upload bool) http.Handler {
 			return
 		}
 		defer f.Close()
+		if upload {
+			// An uploaded .html must not run as script on yonder's origin, where the cookie
+			// is shared by every port on this IP.
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			w.Header().Set("Content-Security-Policy", "sandbox")
+		}
 		http.ServeContent(w, r, info.Name(), info.ModTime(), f)
 	})
 }
@@ -136,7 +143,7 @@ func serveListing(w http.ResponseWriter, root *os.Root, rel, only, title string,
 		for len(visible) <= maxListing {
 			batch, err := dir.ReadDir(512)
 			for _, e := range batch {
-				if !strings.HasPrefix(e.Name(), ".") && e.Type()&fs.ModeSymlink == 0 {
+				if visibleName(e.Name(), runtime.GOOS == "windows") && (e.IsDir() || e.Type().IsRegular()) {
 					visible = append(visible, e)
 				}
 			}
@@ -214,4 +221,11 @@ func safeRel(urlPath string, windows bool) (string, bool) {
 		}
 	}
 	return rel, true
+}
+
+// visibleName reports whether a directory entry may be listed: the same rules that
+// decide whether its URL would be served.
+func visibleName(name string, windows bool) bool {
+	_, ok := safeRel("/"+name, windows)
+	return ok
 }

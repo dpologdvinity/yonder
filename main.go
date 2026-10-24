@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"syscall"
@@ -19,7 +20,14 @@ import (
 	"github.com/mdp/qrterminal/v4"
 )
 
+// version is set by goreleaser; `go install` builds fall back to the module version.
 var version = "dev"
+
+func init() {
+	if bi, ok := debug.ReadBuildInfo(); ok && version == "dev" && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+		version = strings.TrimPrefix(bi.Main.Version, "v")
+	}
+}
 
 const usage = "usage: yonder <port|path> [--listen N] [--open] [--upload]\n       yonder --version\n"
 
@@ -90,7 +98,7 @@ func run(args []string, stdout, stderr io.Writer, ctx context.Context) int {
 		return 0
 	}
 	if err != nil {
-		fmt.Fprint(stderr, usage)
+		fmt.Fprintf(stderr, "yonder: %v\n%s", err, usage)
 		return 1
 	}
 	if opts.showVersion {
@@ -155,13 +163,15 @@ func run(args []string, stdout, stderr io.Writer, ctx context.Context) int {
 	fmt.Fprintln(stdout)
 
 	// No write timeout: SSE and WebSockets are long-lived. The header timeout stops slowloris.
-	srv := &http.Server{Handler: withLog(handler, stdout, time.Now), ReadHeaderTimeout: 10 * time.Second, ConnState: newConnLogger(stdout, time.Now)}
+	srv := &http.Server{Handler: withLog(handler, stdout, time.Now), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute, ConnState: newConnLogger(stdout, time.Now)}
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(ln) }()
 	select {
 	case <-ctx.Done():
 		// Close, not Shutdown: Shutdown waits on hijacked WebSocket connections.
 		srv.Close()
+		// Let half-finished uploads remove their temp files before the shared folder closes.
+		waitUploads(3 * time.Second)
 		return 0
 	case err := <-served:
 		return fail(err)

@@ -198,3 +198,47 @@ func TestEndToEndUpload(t *testing.T) {
 		t.Errorf("uploaded file = %q, %v", b, err)
 	}
 }
+
+func TestEndToEndInterruptDuringUploadLeavesNoTempFiles(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no os.Interrupt delivery to child processes")
+	}
+	dir := t.TempDir()
+	url, cmd, exited := startYonderOn(t, dir, `http://[0-9.]+:%d/\?yonder=[A-Za-z0-9_-]{22}`, "--upload")
+	jar, _ := cookiejar.New(nil)
+	get(t, &http.Client{Jar: jar}, url)
+	host := strings.TrimPrefix(url[:strings.Index(url, "/?")], "http://")
+	token := url[strings.Index(url, "yonder=")+7:]
+
+	// An upload that claims 1 MB and sends 10 bytes, then stalls.
+	conn, err := net.Dial("tcp", host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	body := "--B\r\nContent-Disposition: form-data; name=\"file\"; filename=\"big.bin\"\r\n\r\n0123456789"
+	fmt.Fprintf(conn, "POST / HTTP/1.1\r\nHost: %s\r\nCookie: yonder_%s=%s\r\nContent-Type: multipart/form-data; boundary=B\r\nContent-Length: 1000000\r\n\r\n%s",
+		host, host[strings.LastIndex(host, ":")+1:], token, body)
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		entries, _ := os.ReadDir(dir)
+		if len(entries) > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the upload never created a temp file, so the test proves nothing")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	cmd.Process.Signal(os.Interrupt)
+	select {
+	case <-exited:
+	case <-time.After(10 * time.Second):
+		t.Fatal("yonder did not exit")
+	}
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		t.Errorf("left in the shared folder after Ctrl-C: %s", e.Name())
+	}
+}

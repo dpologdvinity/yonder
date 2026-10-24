@@ -278,3 +278,31 @@ func TestFilesSingleModeListsItsFileInBigFolder(t *testing.T) {
 		t.Errorf("single-file listing lost its file:\n%s", body)
 	}
 }
+
+func TestFilesUploadModeSandboxesContent(t *testing.T) {
+	_, root := uploadDir(t)
+	rec := getFile(newFileServer(root, "", true), "/index.txt", nil)
+	if rec.Header().Get("X-Content-Type-Options") != "nosniff" || rec.Header().Get("Content-Security-Policy") != "sandbox" {
+		t.Errorf("headers = %v, want nosniff and CSP sandbox when uploads are on", rec.Header())
+	}
+	rec = getFile(newFileServer(root, "", false), "/index.txt", nil)
+	if rec.Header().Get("Content-Security-Policy") != "" {
+		t.Error("CSP sandbox set with uploads off; it would break shared static sites")
+	}
+}
+
+func TestVisibleName(t *testing.T) {
+	tests := []struct {
+		name    string
+		windows bool
+		want    bool
+	}{
+		{"a.txt", false, true}, {".env", false, false}, {"a~1.txt", true, false},
+		{"a~1.txt", false, true}, {"a:b", true, false},
+	}
+	for _, tt := range tests {
+		if got := visibleName(tt.name, tt.windows); got != tt.want {
+			t.Errorf("visibleName(%q, %v) = %v, want %v", tt.name, tt.windows, got, tt.want)
+		}
+	}
+}

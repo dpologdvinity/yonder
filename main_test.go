@@ -48,7 +48,7 @@ func TestRunUsage(t *testing.T) {
 	if code := run([]string{"70000"}, &out, &errOut, context.Background()); code != 1 {
 		t.Errorf("exit code = %d, want 1", code)
 	}
-	if !strings.HasPrefix(errOut.String(), "usage: yonder") {
+	if !strings.Contains(errOut.String(), "usage: yonder") || !strings.Contains(errOut.String(), "yonder: invalid port") {
 		t.Errorf("stderr = %q, want usage", errOut.String())
 	}
 }
@@ -124,5 +124,15 @@ func TestFileHandlerUploadNeedsFolder(t *testing.T) {
 	os.WriteFile(p, []byte("x"), 0o644)
 	if _, _, _, err := fileHandler(p, true); err == nil || err.Error() != "--upload needs a folder" {
 		t.Errorf("err = %v, want --upload needs a folder", err)
+	}
+}
+
+func TestRunUsageErrorsSayWhy(t *testing.T) {
+	var out, errOut strings.Builder
+	if code := run([]string{"3000", "--upload"}, &out, &errOut, context.Background()); code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(errOut.String(), "yonder: --upload needs a folder") {
+		t.Errorf("stderr = %q, want the reason", errOut.String())
 	}
 }
