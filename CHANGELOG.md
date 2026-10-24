@@ -4,6 +4,8 @@ All notable changes to yonder are listed here. The format follows [Keep a Change
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-24
+
 ### Added
 - `--public` (and `--no-approve`): share over the internet through a Cloudflare quick tunnel, using an installed `cloudflared`. Defaults to `--for 1h` and `--approve`; refuses `--open`. The approval question shows the visitor's address and country. The tunnel points at a separate loopback port, and only that port believes Cloudflare's visitor headers. Over the tunnel, the proxy keeps `https` in same-site `Origin` checks and in redirects. A refused visitor is blocked for the rest of the run.
 
@@ -106,7 +108,8 @@ All notable changes to yonder are listed here. The format follows [Keep a Change
 - First release: `yonder <port>` shares a local site on the network with a link and QR code. A reverse proxy rewrites `Host`, `Origin`, redirects and cookies, passes WebSockets and event streams through, and works with servers that listen only on IPv6.
 - A stable default port (shared port plus 10000), a request log, and a hint for WSL in NAT mode.
 
-[Unreleased]: https://github.com/dpologdvinity/yonder/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/dpologdvinity/yonder/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/dpologdvinity/yonder/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/dpologdvinity/yonder/compare/v0.4.4...v0.5.0
 [0.4.4]: https://github.com/dpologdvinity/yonder/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/dpologdvinity/yonder/compare/v0.4.2...v0.4.3
