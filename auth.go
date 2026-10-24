@@ -63,7 +63,7 @@ func withAuthDevices(h http.Handler, token string, listenPort int, devices *devi
 
 		newDevice := false
 		if devices != nil && !viaCookie { // the link proves the token; this browser is new
-			id, ok := devices.begin(r.RemoteAddr, r.UserAgent())
+			id, ok := devices.beginFrom(r.RemoteAddr, r.UserAgent(), requestCountry(r))
 			if !ok {
 				refuse(w, http.StatusTooManyRequests, "yonder: Too many devices are waiting for approval. Try again in a moment.\n")
 				return
@@ -78,7 +78,7 @@ func withAuthDevices(h http.Handler, token string, listenPort int, devices *devi
 				if devices != nil {
 					value = token + "." + deviceID
 				}
-				http.SetCookie(w, &http.Cookie{Name: cookieName, Value: value, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode})
+				http.SetCookie(w, &http.Cookie{Name: cookieName, Value: value, Path: "/", HttpOnly: true, Secure: requestIsSecure(r), SameSite: http.SameSiteLaxMode})
 			}
 			if r.Method == http.MethodGet || r.Method == http.MethodHead {
 				// One leading slash only: "//host" would be an open redirect.

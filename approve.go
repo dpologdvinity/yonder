@@ -42,7 +42,9 @@ const (
 type device struct {
 	id        string
 	addr      string // the visitor's address with its port, for the owner's question
-	host      string // the visitor's address without the port, to limit places per visitor
+	host      string // the visitor's address without the port, shown to the owner
+	group     string // the visitor the address belongs to (an IPv6 /64), to limit places per visitor
+	country   string // two-letter country code from the tunnel, or "" when unknown
 	userAgent string // the browser's own description of itself; never printed as it is
 	state     deviceState
 	lastSeen  time.Time // when a waiting device last asked, to forget the ones that left
@@ -68,10 +70,15 @@ func newDeviceTable() *deviceTable {
 	}
 }
 
-// begin records a new device in the pending state and queues it for the owner's question. It
-// returns the device's id, or false when too many devices are waiting, in total or from this
-// address. Devices that stopped waiting are forgotten first.
+// begin is beginFrom for a device whose country is not known.
 func (t *deviceTable) begin(addr, userAgent string) (string, bool) {
+	return t.beginFrom(addr, userAgent, "")
+}
+
+// beginFrom records a new device in the pending state and queues it for the owner's question. It
+// returns the device's id, or false when too many devices are waiting, in total or from this
+// visitor (an IPv4 address, or an IPv6 /64). Devices that stopped waiting are forgotten first.
+func (t *deviceTable) beginFrom(addr, userAgent, country string) (string, bool) {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		host = addr
@@ -82,16 +89,17 @@ func (t *deviceTable) begin(addr, userAgent string) (string, bool) {
 	if t.pending >= maxPendingDevices {
 		return "", false
 	}
+	group := addrGroup(host)
 	fromHost := 0
 	for _, d := range t.devices {
-		if d.state == devPending && d.host == host {
+		if d.state == devPending && d.group == group {
 			fromHost++
 		}
 	}
 	if fromHost >= maxPendingPerAddress {
 		return "", false
 	}
-	d := &device{id: newToken(), addr: addr, host: host, userAgent: userAgent, state: devPending, lastSeen: t.now()}
+	d := &device{id: newToken(), addr: addr, host: host, group: group, country: country, userAgent: userAgent, state: devPending, lastSeen: t.now()}
 	t.devices[d.id] = d
 	t.pending++
 	t.queue = append(t.queue, d)
@@ -197,7 +205,11 @@ func runPrompts(ctx context.Context, in io.Reader, out io.Writer, t *deviceTable
 			return
 		}
 		flushInput(in)
-		say(out, "\nAllow %s at %s to open this? [y/N] ", describeUserAgent(d.userAgent), d.host)
+		where := d.host
+		if d.country != "" {
+			where += " (" + d.country + ")"
+		}
+		say(out, "\nAllow %s at %s to open this? [y/N] ", describeUserAgent(d.userAgent), where)
 		switch strings.ToLower(strings.TrimSpace(readLine(in))) { // end of input gives "", which means no
 		case "y", "yes":
 			t.decide(d.id, true)

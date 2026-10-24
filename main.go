@@ -65,7 +65,7 @@ func versionFromBuildInfo(current, module string) string {
 
 // usage is the help text. It is printed to stdout for --help and to stderr, after the reason,
 // when the arguments are wrong.
-const usage = "usage: yonder <port|path> [--listen N] [--open] [--upload] [--for TIME] [--approve]\n       yonder --version\n"
+const usage = "usage: yonder <port|path> [--listen N] [--open] [--upload] [--for TIME] [--approve] [--public] [--no-approve]\n       yonder --version\n"
 
 // options holds the parsed command line. Exactly one of port and path is set, unless
 // showVersion is true.
@@ -76,6 +76,8 @@ type options struct {
 	upload            bool          // accept files from other devices (folders only)
 	forDur            time.Duration // stop sharing after this long; 0 means no limit
 	approve           bool          // the owner must allow each new device at the terminal
+	public            bool          // also share over the internet through a Cloudflare tunnel
+	noApprove         bool          // with public: do not ask before letting a device in
 }
 
 // main runs yonder until it receives an interrupt, terminate or hang-up signal, then exits with
@@ -96,6 +98,8 @@ func parseArgs(args []string) (options, error) {
 	fs.BoolVar(&o.open, "open", false, "")
 	fs.BoolVar(&o.upload, "upload", false, "")
 	fs.BoolVar(&o.approve, "approve", false, "")
+	fs.BoolVar(&o.public, "public", false, "")
+	fs.BoolVar(&o.noApprove, "no-approve", false, "")
 	fs.BoolVar(&o.showVersion, "version", false, "")
 	forText := fs.String("for", "", "")
 	if err := fs.Parse(args); err != nil {
@@ -135,12 +139,29 @@ func parseArgs(args []string) (options, error) {
 	if o.approve && o.open {
 		return options{}, errors.New("--approve needs the access token, so it cannot be used with --open")
 	}
+	if o.noApprove && !o.public {
+		return options{}, errors.New("--no-approve only makes sense together with --public")
+	}
+	if o.approve && o.noApprove {
+		return options{}, errors.New("--approve and --no-approve contradict each other")
+	}
+	if o.public && o.open {
+		return options{}, errors.New("--public needs the access token, so it cannot be used with --open")
+	}
 	if *forText != "" {
 		d, err := parseDuration(*forText)
 		if err != nil {
 			return options{}, err
 		}
 		o.forDur = d
+	}
+	if o.public { // safe defaults for sharing with the whole internet
+		if o.forDur == 0 {
+			o.forDur = time.Hour
+		}
+		if !o.noApprove {
+			o.approve = true
+		}
 	}
 	return o, nil
 }
@@ -238,11 +259,19 @@ func chooseTarget(opts options) (shareTarget, error) {
 	}, nil
 }
 
-// serve shares what opts names and blocks until ctx is cancelled, the --for time is up, or
-// the server fails. A normal stop returns nil.
+// serve shares what opts names and blocks until ctx is cancelled, the --for time is up, the
+// tunnel stops, or the server fails. A normal stop returns nil.
 func serve(ctx context.Context, opts options, stdin io.Reader, stdout io.Writer) error {
 	if opts.approve && !canAsk(stdin) {
 		return errors.New("--approve needs a terminal to ask you on, and yonder must be running in the foreground")
+	}
+	cloudflared := ""
+	if opts.public {
+		path, err := findCloudflared()
+		if err != nil {
+			return err
+		}
+		cloudflared = path
 	}
 	share, err := chooseTarget(opts)
 	if err != nil {
@@ -263,66 +292,139 @@ func serve(ctx context.Context, opts options, stdin io.Reader, stdout io.Writer)
 	}
 	actual := ln.Addr().(*net.TCPAddr).Port
 
-	handler := share.handler
-	suffix, warning := "", "Anyone on this network can open this URL (--open)."
-	if !opts.open {
-		token := newToken()
-		var devices *deviceTable
-		if opts.approve {
-			devices = newDeviceTable()
-			promptCtx, stopPrompts := context.WithCancel(ctx)
-			defer stopPrompts()
-			go runPrompts(promptCtx, stdin, stdout, devices)
+	handler, suffix, warning, stopPrompts := guard(ctx, opts, share.handler, actual, stdin, stdout)
+	defer stopPrompts()
+	chain := withLog(handler, stdout, time.Now)
+	tracker := newConnTracker()
+	lan := newServer(withLANEdge(chain), newConnLogger(stdout, time.Now), tracker)
+
+	var tun *tunnel
+	var tunnelSrv *http.Server
+	publicURL := ""
+	if opts.public {
+		tunnelSrv, tun, err = startPublic(ctx, cloudflared, chain, tracker)
+		if err != nil {
+			return err
 		}
-		handler = withAuthDevices(handler, token, actual, devices)
-		suffix, warning = "/?yonder="+token, "Only people with this link or QR code can open it."
-		if opts.approve {
-			warning = "Only people with this link or QR code can open it, and you must approve each new device here."
-		}
+		defer tun.stop()
+		publicURL = tun.URL + suffix
 	}
-	printBanner(stdout, opts, share.what, addrs, actual, suffix, warning)
+	printBanner(stdout, opts, share.what, addrs, actual, suffix, warning, publicURL)
 
 	if opts.forDur > 0 {
 		var cancel context.CancelCauseFunc
 		ctx, cancel = expireAt(ctx, opts.forDur, time.Now)
 		defer cancel(nil)
 	}
-	tracker := newConnTracker()
-	logConn := newConnLogger(stdout, time.Now)
-
-	// No write timeout: SSE and WebSockets are long-lived. The header timeout stops slowloris.
-	srv := &http.Server{Handler: withLog(handler, stdout, time.Now), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute, ConnState: func(c net.Conn, s http.ConnState) {
-		logConn(c, s)
-		tracker.track(c, s)
-	}}
 	served := make(chan error, 1)
-	go func() { served <- srv.Serve(ln) }()
+	go func() { served <- lan.Serve(ln) }()
+	var tunnelStopped <-chan error // stays nil, and so never ready, when there is no tunnel
+	if tun != nil {
+		tunnelStopped = tun.done
+	}
 	select {
 	case <-ctx.Done():
 		if errors.Is(context.Cause(ctx), errTimeUp) {
 			say(stdout, "\nThe time is up, so yonder is stopping.\n")
 		}
 		// Close, not Shutdown: Shutdown waits on hijacked WebSocket connections.
-		_ = srv.Close()    // best effort: the process is about to exit
+		_ = lan.Close() // best effort: the process is about to exit
+		if tunnelSrv != nil {
+			_ = tunnelSrv.Close()
+		}
 		tracker.closeAll() // Close leaves WebSocket connections open; they must not outlive the share
 		// Let half-finished uploads remove their temp files before the shared folder closes.
 		waitUploads(3 * time.Second)
 		return nil
 	case err := <-served:
 		return err
+	case err := <-tunnelStopped:
+		if err != nil {
+			return fmt.Errorf("the tunnel stopped: %w", err)
+		}
+		return errors.New("the tunnel stopped")
 	}
 }
 
+// newServer returns an http.Server for handler with yonder's timeouts: a limit on how long
+// request headers may take (against slow-connection attacks) and on idle connections, but none
+// on writing, because WebSockets and event streams are long-lived. onState is called for every
+// connection state change, and tracker remembers hijacked connections.
+func newServer(handler http.Handler, onState func(net.Conn, http.ConnState), tracker *connTracker) *http.Server {
+	return &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+		ConnState: func(c net.Conn, s http.ConnState) {
+			if onState != nil {
+				onState(c, s)
+			}
+			tracker.track(c, s)
+		},
+	}
+}
+
+// guard puts the access gate in front of handler, unless --open was given. It returns the
+// guarded handler, the text to add to the link ("/?yonder=<token>"), the warning line for the
+// banner, and a function that stops the terminal questions of --approve.
+func guard(ctx context.Context, opts options, handler http.Handler, port int, stdin io.Reader, stdout io.Writer) (http.Handler, string, string, func()) {
+	if opts.open {
+		return handler, "", "Anyone on this network can open this URL (--open).", func() {}
+	}
+	token := newToken()
+	var devices *deviceTable
+	stop := func() {}
+	warning := "Only people with this link or QR code can open it."
+	if opts.approve {
+		devices = newDeviceTable()
+		var promptCtx context.Context
+		promptCtx, stop = context.WithCancel(ctx)
+		go runPrompts(promptCtx, stdin, stdout, devices)
+		warning += " You must approve each new device here."
+	}
+	return withAuthDevices(handler, token, port, devices), "/?yonder=" + token, warning, stop
+}
+
+// startPublic starts the loopback listener that only the tunnel connects to, serving handler
+// with the tunnel edge rules, and starts cloudflared pointed at it.
+func startPublic(ctx context.Context, cloudflared string, handler http.Handler, tracker *connTracker) (*http.Server, *tunnel, error) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, nil, err
+	}
+	srv := newServer(withTunnelEdge(handler), nil, tracker)
+	go func() { _ = srv.Serve(ln) }() // the error is the normal one when the server is closed
+	tun, err := startTunnel(ctx, cloudflared, ln.Addr().String(), 30*time.Second)
+	if err != nil {
+		_ = srv.Close()
+		return nil, nil, err
+	}
+	return srv, tun, nil
+}
+
 // printBanner prints what is shared, the link (and any other links), the QR code, the access
-// warning, and notes about uploads, the time limit and WSL.
-func printBanner(w io.Writer, opts options, what string, addrs []net.IP, port int, suffix, warning string) {
-	url := fmt.Sprintf("http://%s:%d%s", addrs[0], port, suffix)
-	say(w, "yonder: sharing %s\n\n  %s\n", what, url)
-	qrterminal.GenerateHalfBlock(url, qrterminal.L, w)
+// warning, and notes about uploads, the time limit and WSL. With publicURL set, the public link
+// and its QR code come first and the local link follows.
+func printBanner(w io.Writer, opts options, what string, addrs []net.IP, port int, suffix, warning, publicURL string) {
+	lanURL := fmt.Sprintf("http://%s:%d%s", addrs[0], port, suffix)
+	if publicURL != "" {
+		say(w, "yonder: sharing %s\n\n  Public link: %s\n", what, publicURL)
+		qrterminal.GenerateHalfBlock(publicURL, qrterminal.L, w)
+		say(w, "  On your network: %s\n", lanURL)
+	} else {
+		say(w, "yonder: sharing %s\n\n  %s\n", what, lanURL)
+		qrterminal.GenerateHalfBlock(lanURL, qrterminal.L, w)
+	}
 	for _, a := range addrs[1:] {
 		say(w, "  also: http://%s:%d%s\n", a, port, suffix)
 	}
 	say(w, "\n%s\n", warning)
+	if publicURL != "" {
+		say(w, "Public on the internet. Cloudflare carries this traffic and can read it. Anyone with the link, anywhere, can ask to get in.\n")
+		if opts.noApprove {
+			say(w, "Nobody asks you first (--no-approve): anyone with the link gets in.\n")
+		}
+	}
 	if opts.upload {
 		say(w, "Uploads are on: files sent from other devices land in %s.\n", what)
 	}
