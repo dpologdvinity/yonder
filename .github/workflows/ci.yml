@@ -114,9 +114,11 @@ jobs:
           node-version: "24"
       - name: Test with the race detector (Linux and macOS)
         if: runner.os != 'Windows'
+        shell: bash
         run: go test -race -count=1 -covermode=atomic -coverprofile=coverage.out ./...
       - name: Test (Windows)
         if: runner.os == 'Windows'
+        shell: bash # PowerShell would split "-coverprofile=coverage.out" at the dot
         run: go test -count=1 -covermode=atomic -coverprofile=coverage.out ./...
       - name: Coverage report
         shell: bash
