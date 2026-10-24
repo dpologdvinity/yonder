@@ -6,7 +6,15 @@
 [![Latest release](https://img.shields.io/github/v/release/dpologdvinity/yonder)](https://github.com/dpologdvinity/yonder/releases/latest)
 [![npm](https://img.shields.io/npm/v/yonder-cli?label=npm)](https://www.npmjs.com/package/yonder-cli)
 [![PyPI](https://img.shields.io/pypi/v/yonder-cli?label=PyPI)](https://pypi.org/project/yonder-cli/)
+[![Go reference](https://pkg.go.dev/badge/github.com/dpologdvinity/yonder.svg)](https://pkg.go.dev/github.com/dpologdvinity/yonder)
 [![Go version](https://img.shields.io/github/go-mod/go-version/dpologdvinity/yonder)](go.mod)
+[![Node.js](https://img.shields.io/node/v/yonder-cli?label=node)](https://www.npmjs.com/package/yonder-cli)
+[![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS%20%7C%20Windows-informational)](#install)
+[![Downloads](https://img.shields.io/github/downloads/dpologdvinity/yonder/total)](https://github.com/dpologdvinity/yonder/releases)
+[![Stars](https://img.shields.io/github/stars/dpologdvinity/yonder?style=flat)](https://github.com/dpologdvinity/yonder/stargazers)
+[![Last commit](https://img.shields.io/github/last-commit/dpologdvinity/yonder)](https://github.com/dpologdvinity/yonder/commits/master)
+[![Open issues](https://img.shields.io/github/issues/dpologdvinity/yonder)](https://github.com/dpologdvinity/yonder/issues)
+[![Conventional Commits](https://img.shields.io/badge/Conventional%20Commits-1.0.0-yellow)](https://www.conventionalcommits.org/)
 [![License: MIT](https://img.shields.io/github/license/dpologdvinity/yonder)](LICENSE)
 
 yonder lets you open a website running on your own computer (`localhost`) from your phone, your iPad, or a friend's laptop on the same network. It can also share a file or a whole folder, and let the other device send files back. One command prints a link and a QR code. Nothing needs to be installed on the other device.
