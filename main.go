@@ -99,19 +99,19 @@ func parseArgs(args []string) (options, error) {
 func run(args []string, stdout, stderr io.Writer, ctx context.Context) int {
 	opts, err := parseArgs(args)
 	if errors.Is(err, flag.ErrHelp) {
-		fmt.Fprint(stdout, usage)
+		say(stdout, "%s", usage)
 		return 0
 	}
 	if err != nil {
-		fmt.Fprintf(stderr, "yonder: %v\n%s", err, usage)
+		say(stderr, "yonder: %v\n%s", err, usage)
 		return 1
 	}
 	if opts.showVersion {
-		fmt.Fprintf(stdout, "yonder %s\n", version)
+		say(stdout, "yonder %s\n", version)
 		return 0
 	}
 	fail := func(err error) int {
-		fmt.Fprintf(stderr, "yonder: %v\n", err)
+		say(stderr, "yonder: %v\n", err)
 		return 1
 	}
 
@@ -123,7 +123,7 @@ func run(args []string, stdout, stderr io.Writer, ctx context.Context) int {
 		if err != nil {
 			return fail(err)
 		}
-		defer closeRoot()
+		defer func() { _ = closeRoot() }() // best effort: the process is about to exit
 		handler, what, port = h, abs, fileBasePort
 	} else {
 		target, err := findTarget(port)
@@ -153,19 +153,19 @@ func run(args []string, stdout, stderr io.Writer, ctx context.Context) int {
 	}
 
 	url := fmt.Sprintf("http://%s:%d%s", addrs[0], actual, suffix)
-	fmt.Fprintf(stdout, "yonder: sharing %s\n\n  %s\n", what, url)
+	say(stdout, "yonder: sharing %s\n\n  %s\n", what, url)
 	qrterminal.GenerateHalfBlock(url, qrterminal.L, stdout)
 	for _, a := range addrs[1:] {
-		fmt.Fprintf(stdout, "  also: http://%s:%d%s\n", a, actual, suffix)
+		say(stdout, "  also: http://%s:%d%s\n", a, actual, suffix)
 	}
-	fmt.Fprintln(stdout, "\n"+warning)
+	say(stdout, "\n%s\n", warning)
 	if opts.upload {
-		fmt.Fprintf(stdout, "Uploads are on: files sent from other devices land in %s.\n", what)
+		say(stdout, "Uploads are on: files sent from other devices land in %s.\n", what)
 	}
 	if hint := detectWSLHint(); hint != "" {
-		fmt.Fprint(stdout, "\n"+hint)
+		say(stdout, "\n%s", hint)
 	}
-	fmt.Fprintln(stdout)
+	say(stdout, "\n")
 
 	// No write timeout: SSE and WebSockets are long-lived. The header timeout stops slowloris.
 	srv := &http.Server{Handler: withLog(handler, stdout, time.Now), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute, ConnState: newConnLogger(stdout, time.Now)}
@@ -174,7 +174,7 @@ func run(args []string, stdout, stderr io.Writer, ctx context.Context) int {
 	select {
 	case <-ctx.Done():
 		// Close, not Shutdown: Shutdown waits on hijacked WebSocket connections.
-		srv.Close()
+		_ = srv.Close() // best effort: the process is about to exit
 		// Let half-finished uploads remove their temp files before the shared folder closes.
 		waitUploads(3 * time.Second)
 		return 0
@@ -225,3 +225,7 @@ func noAddrError(best net.IP) error {
 	}
 	return errors.New("no network connection found")
 }
+
+// say writes formatted output to w. A failed write (a closed terminal, an HTTP client
+// that went away) cannot be handled usefully, so the error is dropped here, in one place.
+func say(w io.Writer, format string, args ...any) { _, _ = fmt.Fprintf(w, format, args...) }

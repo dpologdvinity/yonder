@@ -35,7 +35,7 @@ func withAuth(h http.Handler, token string, listenPort int) http.Handler {
 		if !viaQuery && !viaCookie {
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			w.WriteHeader(http.StatusForbidden)
-			fmt.Fprint(w, "yonder: this link needs the access token. Scan the QR code from the person sharing.\n")
+			say(w, "yonder: this link needs the access token. Scan the QR code from the person sharing.\n")
 			return
 		}
 

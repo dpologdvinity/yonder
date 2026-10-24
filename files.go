@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"html/template"
 	"io"
@@ -57,7 +58,7 @@ func newFileServer(root *os.Root, only string, upload bool) http.Handler {
 			}
 			fi, err := root.Lstat(strings.Join(segs[:i+1], "/"))
 			// Only plain folders and files: no symlinks, junctions, FIFOs or devices.
-			if err != nil || !(fi.IsDir() || fi.Mode().IsRegular()) {
+			if err != nil || (!fi.IsDir() && !fi.Mode().IsRegular()) {
 				http.NotFound(w, r)
 				return
 			}
@@ -186,7 +187,8 @@ func serveListing(w http.ResponseWriter, root *os.Root, rel, only, title string,
 		list = append(list, listEntry{Name: name, Href: "./" + url.PathEscape(name), Size: size})
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	listingTmpl.Execute(w, struct {
+	var page bytes.Buffer // render first, so a template failure can still become a clean 500
+	err = listingTmpl.Execute(&page, struct {
 		Title     string
 		Upload    bool
 		MaxUpload int64
@@ -194,6 +196,11 @@ func serveListing(w http.ResponseWriter, root *os.Root, rel, only, title string,
 		Truncated bool
 		Entries   []listEntry
 	}{title, upload, maxUpload, maxListing, truncated, list})
+	if err != nil {
+		http.Error(w, "cannot render folder", http.StatusInternalServerError)
+		return
+	}
+	_, _ = w.Write(page.Bytes()) // a client that went away cannot be told anything
 }
 
 // humanSize formats bytes with a 1024 base: 0 B, 999 B, 1.0 KB, 1.5 MB.

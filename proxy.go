@@ -41,7 +41,7 @@ func newProxy(targetAddr string, port int) *httputil.ReverseProxy {
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			w.WriteHeader(http.StatusBadGateway)
-			fmt.Fprintf(w, "yonder: localhost:%d is not responding\n", port)
+			say(w, "yonder: localhost:%d is not responding\n", port)
 		},
 	}
 }
@@ -98,7 +98,7 @@ func withLog(h http.Handler, w io.Writer, now func() time.Time) http.Handler {
 			}
 			u := *r.URL
 			u.RawQuery = redactToken(u.RawQuery) // the share token must not reach the terminal log
-			fmt.Fprintf(w, "%s  %s %s  %d  %s\n", start.Format("15:04:05"), r.Method, u.RequestURI(), rec.status, ip)
+			say(w, "%s  %s %s  %d  %s\n", start.Format("15:04:05"), r.Method, u.RequestURI(), rec.status, ip)
 		}()
 		h.ServeHTTP(rec, r)
 	})
@@ -155,6 +155,6 @@ func newConnLogger(w io.Writer, now func() time.Time) func(net.Conn, http.ConnSt
 			return
 		}
 		seen[ip] = true
-		fmt.Fprintf(w, "%s  device connected  %s\n", now().Format("15:04:05"), ip)
+		say(w, "%s  device connected  %s\n", now().Format("15:04:05"), ip)
 	}
 }

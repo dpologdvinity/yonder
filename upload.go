@@ -117,7 +117,7 @@ func saveUnique(root *os.Root, dir, name string, src io.Reader) error {
 		err = cerr
 	}
 	if err != nil {
-		root.Remove(tmp)
+		_ = root.Remove(tmp) // best effort: the write already failed, and the caller reports that error
 		return err
 	}
 
@@ -134,7 +134,7 @@ func saveUnique(root *os.Root, dir, name string, src io.Reader) error {
 			continue
 		}
 		if err != nil {
-			root.Remove(tmp)
+			_ = root.Remove(tmp)
 			if isBadNameErr(err) {
 				return fmt.Errorf("%w: %w", errBadName, err)
 			}
@@ -142,13 +142,13 @@ func saveUnique(root *os.Root, dir, name string, src io.Reader) error {
 		}
 		placeholder.Close()
 		if err := root.Rename(tmp, final); err != nil {
-			root.Remove(tmp)
-			root.Remove(final) // the empty placeholder we just created
+			_ = root.Remove(tmp)
+			_ = root.Remove(final) // the empty placeholder we just created
 			return err
 		}
 		return nil
 	}
-	root.Remove(tmp)
+	_ = root.Remove(tmp)
 	return errors.New("too many files with this name")
 }
 
