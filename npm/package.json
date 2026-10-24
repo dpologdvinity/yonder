@@ -1,6 +1,6 @@
 {
   "name": "yonder-cli",
-  "version": "0.4.0",
+  "version": "0.4.3",
   "description": "your site, over yonder: share a localhost site or files with your phone via a QR code",
   "homepage": "https://github.com/dpologdvinity/yonder",
   "repository": { "type": "git", "url": "git+https://github.com/dpologdvinity/yonder.git", "directory": "npm" },

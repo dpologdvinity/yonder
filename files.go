@@ -186,6 +186,9 @@ func serveListing(w http.ResponseWriter, root *os.Root, rel, only, title string,
 	}
 
 	var list []listEntry
+	if rel != "." {
+		list = append(list, listEntry{Name: "../", Href: "../"})
+	}
 	for _, e := range visible {
 		name := e.Name()
 		if e.IsDir() {

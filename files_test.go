@@ -96,6 +96,21 @@ func TestFilesListing(t *testing.T) {
 			t.Errorf("listing shows hidden %q", hidden)
 		}
 	}
+	if strings.Contains(body, `href="../"`) {
+		t.Errorf("root listing should not have ../ parent link")
+	}
+}
+
+// TestFilesSubfolderListing checks that subfolder listing contains a parent directory link (../).
+func TestFilesSubfolderListing(t *testing.T) {
+	rec := getFile(newFileServer(fileFixture(t), "", false), "/sub/", nil)
+	body := rec.Body.String()
+	if rec.Code != 200 || !strings.Contains(body, `href="../"`) {
+		t.Fatalf("subfolder listing lacks ../ link, got %d:\n%s", rec.Code, body)
+	}
+	if !strings.Contains(body, `href="./b.txt"`) {
+		t.Errorf("subfolder listing lacks b.txt:\n%s", body)
+	}
 }
 
 // TestFilesServeFile checks that a file downloads in full and that a Range request gets just

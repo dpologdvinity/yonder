@@ -140,6 +140,24 @@ func TestProxyLocationRewrite(t *testing.T) {
 	}
 }
 
+// TestProxyLocationRewritePort80 checks that redirects without explicit port 80 are rewritten
+// when proxying port 80, but left alone when proxying another port.
+func TestProxyLocationRewritePort80(t *testing.T) {
+	for _, host := range []string{"localhost", "127.0.0.1", "[::1]"} {
+		h := http.Header{"Location": {"http://" + host + "/login"}}
+		rewriteLocation(h, 80, "192.168.1.50:8080")
+		if got := h.Get("Location"); got != "http://192.168.1.50:8080/login" {
+			t.Errorf("port 80: got %q, want http://192.168.1.50:8080/login", got)
+		}
+
+		h3000 := http.Header{"Location": {"http://" + host + "/login"}}
+		rewriteLocation(h3000, 3000, "192.168.1.50:8080")
+		if got := h3000.Get("Location"); got != "http://"+host+"/login" {
+			t.Errorf("port 3000: got %q, want http://%s/login untouched", got, host)
+		}
+	}
+}
+
 // TestProxySetCookieDomain checks that Domain=localhost is removed from cookies, which browsers
 // would reject on an IP address, and that other attributes stay.
 func TestProxySetCookieDomain(t *testing.T) {

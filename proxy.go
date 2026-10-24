@@ -62,8 +62,14 @@ func rewriteLocation(h http.Header, port int, client string) {
 	if err != nil || u.Host == "" { // relative paths have no host; //host is scheme-relative
 		return
 	}
+	match := false
 	switch strings.ToLower(u.Host) {
 	case fmt.Sprintf("localhost:%d", port), fmt.Sprintf("127.0.0.1:%d", port), fmt.Sprintf("[::1]:%d", port):
+		match = true
+	case "localhost", "127.0.0.1", "[::1]":
+		match = port == 80
+	}
+	if match {
 		u.Scheme, u.Host = "http", client
 		h.Set("Location", u.String())
 	}
