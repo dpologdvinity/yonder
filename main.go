@@ -407,9 +407,10 @@ func expireAt(parent context.Context, d time.Duration, now func() time.Time) (co
 	ctx, cancel := context.WithCancelCause(parent)
 	deadline := now().Round(0).Add(d) // Round(0) drops the timer reading, leaving wall-clock time
 	timer := time.AfterFunc(d, func() { cancel(errTimeUp) })
+	every := clockCheckEvery // read here, in the caller, so the goroutine never touches the variable
 	go func() {
 		defer timer.Stop()
-		tick := time.NewTicker(clockCheckEvery)
+		tick := time.NewTicker(every)
 		defer tick.Stop()
 		for {
 			select {
