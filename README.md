@@ -99,7 +99,7 @@ yonder --version            print the version
 | Option | What it does |
 |---|---|
 | `--listen N` | Uses port `N` for other devices. By default yonder uses the shared port plus 10000 (`3000` becomes `13000`), or 18000 when sharing files, so the link keeps the same port across restarts. If that port is busy, yonder picks a free one. With `--listen`, a busy port is an error. |
-| `--for TIME` | Stops sharing after `TIME`, such as `90s`, `30m`, `2h` or `1d` (more than zero, at most `7d`). yonder prints when the link stops working, and at that time it says so and exits. Works with every other option. |
+| `--for TIME` | Stops sharing after `TIME`, such as `90s`, `30m`, `2h` or `1d` (more than zero, at most `7d`). yonder prints when the link stops working, and at that time it says so and exits. The end time is checked against the clock on the wall, so a laptop that sleeps does not extend the link. Works with every other option. |
 | `--approve` | Asks you at the terminal before each new device is let in. See [Approve each device](#approve-each-device). Needs the token, so it cannot be combined with `--open`. |
 | `--open` | Turns the secret token off. Anyone on the network can open the link. |
 | `--upload` | Lets other devices send files into a shared folder. Folders only. |
@@ -120,14 +120,15 @@ On a network you do not fully trust, the link can leak: someone can photograph t
 ```
 $ yonder 3000 --approve
 ...
-Allow Safari on an iPhone at 192.168.1.42:51000 to open this? [y/N] y
+Allow Safari on an iPhone at 192.168.1.42 to open this? [y/N] y
 Allowed.
 ```
 
 - Answer `y` or `yes` to allow. Anything else, including Enter, refuses. A refused device stays refused until yonder restarts.
 - A device is a browser, not an address, so two people on the same Wi-Fi are asked about separately. Your own phone's browser is asked once; later visits go straight in.
-- At most 10 devices can wait at once; the rest are told to try again.
-- It needs a terminal to ask on, so it does not work with input redirected from a file.
+- At most 10 devices can wait at once, and at most 2 from the same address, so one visitor cannot use up the places. A device whose waiting page is closed gives up its place after a minute.
+- Anything you typed before a question appeared is thrown away, so a stray key cannot answer a question you have not seen.
+- It needs a terminal to ask on, and yonder must be running in the foreground of it. It does not work with input redirected from a file, or with `yonder ... &`.
 - Combine it with `--for` to share for a limited time, with each person approved: `yonder 3000 --for 1h --approve`.
 
 ## Share files
