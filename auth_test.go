@@ -228,3 +228,24 @@ func TestAuthNoReferrerBeatsUpstreamPolicy(t *testing.T) {
 		t.Errorf("Referrer-Policy = %q, want only no-referrer", got)
 	}
 }
+
+// TestAuthKeepsStatusAndFlushThroughNoReferrerWriter checks that when a request carries the
+// token, the wrapper that forces the referrer policy still passes an explicit status code
+// and flushing through to the real response, as streaming apps need.
+func TestAuthKeepsStatusAndFlushThroughNoReferrerWriter(t *testing.T) {
+	up := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Referrer-Policy", "unsafe-url")
+		w.WriteHeader(http.StatusCreated)
+		if err := http.NewResponseController(w).Flush(); err != nil {
+			t.Errorf("flush through the wrapper: %v", err)
+		}
+	})
+	rec := httptest.NewRecorder()
+	withAuth(up, "T0K", 18000).ServeHTTP(rec, httptest.NewRequest("POST", "/api?yonder=T0K", nil))
+	if rec.Code != http.StatusCreated || !rec.Flushed {
+		t.Errorf("got status %d, flushed %v; want 201, true", rec.Code, rec.Flushed)
+	}
+	if got := rec.Header().Get("Referrer-Policy"); got != "no-referrer" {
+		t.Errorf("Referrer-Policy = %q, want no-referrer", got)
+	}
+}

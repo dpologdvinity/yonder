@@ -2,7 +2,9 @@
 
 package main
 
-import "testing"
+import (
+	"testing"
+)
 
 // wantNATHint is the exact text expected from the hint.
 const wantNATHint = "WSL is in NAT mode, so other devices cannot reach it.\n" +
@@ -30,5 +32,13 @@ func TestWSLHint(t *testing.T) {
 				t.Errorf("got %q, want no hint", got)
 			}
 		})
+	}
+}
+
+// TestDetectWSLHint checks the real WSL lookup on whatever machine runs the tests: it must
+// never panic, and must return either nothing or exactly the NAT-mode hint.
+func TestDetectWSLHint(t *testing.T) {
+	if got := detectWSLHint(); got != "" && got != natHint {
+		t.Errorf("detectWSLHint = %q, want empty or the NAT hint", got)
 	}
 }

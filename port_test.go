@@ -5,7 +5,10 @@ package main
 import (
 	"fmt"
 	"net"
+	"os"
+	"runtime"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -99,5 +102,18 @@ func TestListenExplicitBusy(t *testing.T) {
 	}
 	if want := fmt.Sprintf("port %d is in use", q); err.Error() != want {
 		t.Errorf("got %q, want %q", err.Error(), want)
+	}
+}
+
+// TestListenExplicitOtherError checks that a --listen port that fails for a reason other
+// than "in use" (here: a privileged port, as a normal user) reports the real cause and not
+// the misleading "is in use" message.
+func TestListenExplicitOtherError(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("ports below 1024 are open to this user")
+	}
+	_, err := listen(3000, 1)
+	if err == nil || strings.Contains(err.Error(), "in use") || !strings.Contains(err.Error(), "cannot listen on port 1") {
+		t.Errorf("err = %v, want 'cannot listen on port 1: ...'", err)
 	}
 }

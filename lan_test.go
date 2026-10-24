@@ -83,3 +83,25 @@ func TestLanAddrs(t *testing.T) {
 		})
 	}
 }
+
+// TestSystemLANAddrs checks the real network lookup on whatever machine runs the tests: it
+// must not fail, and every address it offers must be a private IPv4 address.
+func TestSystemLANAddrs(t *testing.T) {
+	addrs, err := systemLANAddrs()
+	if err != nil {
+		t.Fatalf("systemLANAddrs: %v", err)
+	}
+	for _, a := range addrs {
+		if a.To4() == nil || !a.IsPrivate() {
+			t.Errorf("offered address %v is not a private IPv4 address", a)
+		}
+	}
+}
+
+// TestDefaultRouteIP checks that the default-route lookup returns either nothing (no
+// network) or a usable address, and never panics.
+func TestDefaultRouteIP(t *testing.T) {
+	if ip := defaultRouteIP(); ip != nil && ip.IsUnspecified() {
+		t.Errorf("defaultRouteIP = %v, want nil or a real address", ip)
+	}
+}

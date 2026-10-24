@@ -5,13 +5,17 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"io"
+	"io/fs"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -314,5 +318,78 @@ func TestListingShowsUploadLimit(t *testing.T) {
 	body := getFile(newFileServer(root, "", true), "/", nil).Body.String()
 	if !strings.Contains(body, `data-max="4294967296"`) || !strings.Contains(body, "too large") {
 		t.Errorf("listing lacks the client-side size check:\n%s", body)
+	}
+}
+
+// TestWaitUploads checks that shutdown waits for uploads still running, gives up after the
+// time limit, and returns at once when none are running.
+func TestWaitUploads(t *testing.T) {
+	if !waitUploads(10 * time.Millisecond) {
+		t.Fatal("waitUploads with no uploads running should return true at once")
+	}
+	uploads.Add(1)
+	if waitUploads(30 * time.Millisecond) {
+		t.Error("waitUploads returned true while an upload was still running")
+	}
+	uploads.Done()
+	if !waitUploads(time.Second) {
+		t.Error("waitUploads should return true once the upload is done")
+	}
+}
+
+// TestIsBadNameErr checks which errors count as "the file system refused the name" (and so
+// give the visitor a 400) and which are real failures such as a full disk.
+func TestIsBadNameErr(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"name too long", &fs.PathError{Op: "open", Path: "x", Err: syscall.ENAMETOOLONG}, true},
+		{"invalid argument", syscall.EINVAL, true},
+		{"invalid per the fs package", fs.ErrInvalid, true},
+		{"disk full", &fs.PathError{Op: "open", Path: "x", Err: syscall.ENOSPC}, false},
+		{"already exists", fs.ErrExist, false},
+		{"no error", nil, false},
+	}
+	for _, tt := range tests {
+		if got := isBadNameErr(tt.err); got != tt.want {
+			t.Errorf("%s: isBadNameErr = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
+// TestSaveUniqueGivesUpAfterManyCopies checks that when 1000 files already use a name and its
+// numbered variants, saving another gives a clear error and leaves no temporary file.
+func TestSaveUniqueGivesUpAfterManyCopies(t *testing.T) {
+	dir, root := uploadDir(t)
+	must(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("x"), 0o644))
+	for i := 1; i < 1000; i++ {
+		must(t, os.WriteFile(filepath.Join(dir, fmt.Sprintf("a (%d).txt", i)), []byte("x"), 0o644))
+	}
+	err := saveUnique(root, ".", "a.txt", strings.NewReader("new"))
+	if err == nil || !strings.Contains(err.Error(), "too many files") {
+		t.Fatalf("err = %v, want 'too many files with this name'", err)
+	}
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".yonder-part") {
+			t.Errorf("temporary file %s left behind", e.Name())
+		}
+	}
+}
+
+// TestUploadUnwritableFolderIs500 checks that when the folder cannot be written to, the
+// visitor gets a plain 500 (a server problem, not a bad request) and nothing is left behind.
+func TestUploadUnwritableFolderIs500(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("folder permissions do not stop this user from writing")
+	}
+	dir, root := uploadDir(t)
+	must(t, os.Chmod(dir, 0o555))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) }) // so the temp dir can be removed
+	rec := postFiles(newFileServer(root, "", true), "/", part{"a.txt", "x"})
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("got %d, want 500", rec.Code)
 	}
 }

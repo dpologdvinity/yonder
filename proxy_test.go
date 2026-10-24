@@ -432,3 +432,19 @@ func TestWithLogKeepsSendfile(t *testing.T) {
 		t.Errorf("log = %q, want status 200", log.String())
 	}
 }
+
+// TestStatusRecorderReadFromFallback checks that downloads still work when the real
+// response writer has no fast ReadFrom path: the recorder copies the bytes itself.
+func TestStatusRecorderReadFromFallback(t *testing.T) {
+	var log strings.Builder
+	rec := httptest.NewRecorder() // a ResponseRecorder does not implement io.ReaderFrom
+	h := withLog(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := io.CopyN(w, strings.NewReader("file bytes"), 10); err != nil {
+			t.Errorf("CopyN: %v", err)
+		}
+	}), &log, time.Now)
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/f", nil))
+	if rec.Body.String() != "file bytes" || !strings.Contains(log.String(), "GET /f  200") {
+		t.Errorf("body %q, log %q; want the bytes copied and status 200 logged", rec.Body.String(), log.String())
+	}
+}

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestParseArgs checks that valid arguments, in any order, give the right options and that
@@ -181,5 +182,91 @@ func TestNoAddrError(t *testing.T) {
 		if err := noAddrError(best); err.Error() != "no network connection found" {
 			t.Errorf("best %v: %v", best, err)
 		}
+	}
+}
+
+// TestVersionFromBuildInfo checks which version is reported: one set by goreleaser wins,
+// a "go install" build uses the module version without its "v", and local builds say "dev".
+func TestVersionFromBuildInfo(t *testing.T) {
+	tests := []struct{ current, module, want string }{
+		{"0.4.3", "v0.9.9", "0.4.3"},
+		{"dev", "v0.4.3", "0.4.3"},
+		{"dev", "(devel)", "dev"},
+		{"dev", "", "dev"},
+	}
+	for _, tt := range tests {
+		if got := versionFromBuildInfo(tt.current, tt.module); got != tt.want {
+			t.Errorf("versionFromBuildInfo(%q, %q) = %q, want %q", tt.current, tt.module, got, tt.want)
+		}
+	}
+}
+
+// runInProcess starts yonder inside the test with args, waits until it has printed its banner,
+// stops it with a cancelled context, and returns what it printed and its exit code. It
+// skips the test on machines with no shareable network address.
+func runInProcess(t *testing.T, args ...string) (stdout string, code int) {
+	t.Helper()
+	var out syncBuf
+	var errOut syncBuf
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan int, 1)
+	go func() { done <- run(args, &out, &errOut, ctx) }()
+	deadline := time.Now().Add(10 * time.Second)
+	for !strings.Contains(out.String(), "can open") { // both warning lines contain it, and it is the banner's last line
+		select {
+		case c := <-done:
+			if strings.Contains(errOut.String(), "no network connection") || strings.Contains(errOut.String(), "public address") {
+				t.Skip("no private network address on this machine")
+			}
+			t.Fatalf("yonder exited early with %d: %s", c, errOut.String())
+		default:
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			t.Fatalf("no banner within 10s; stdout %q stderr %q", out.String(), errOut.String())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case code = <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("yonder did not stop after its context was cancelled")
+	}
+	return out.String(), code
+}
+
+// TestRunSharesAPortInProcess checks the whole start-up path of port mode inside the test:
+// the banner names the shared port and carries a tokened link, and cancelling stops yonder
+// with exit code 0.
+func TestRunSharesAPortInProcess(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+	port := ln.Addr().(*net.TCPAddr).Port
+	out, code := runInProcess(t, fmt.Sprint(port), "--listen", fmt.Sprint(freePort(t)))
+	if code != 0 || !strings.Contains(out, fmt.Sprintf("yonder: sharing localhost:%d", port)) || !strings.Contains(out, "/?yonder=") {
+		t.Errorf("code %d, output %q; want exit 0 and a banner with a tokened link", code, out)
+	}
+}
+
+// TestRunSharesAFolderWithUploadInProcess checks the start-up path of folder mode: the banner
+// names the folder, says uploads are on, and cancelling stops yonder with exit code 0.
+func TestRunSharesAFolderWithUploadInProcess(t *testing.T) {
+	dir := t.TempDir()
+	out, code := runInProcess(t, dir, "--upload", "--listen", fmt.Sprint(freePort(t)))
+	if code != 0 || !strings.Contains(out, "Uploads are on") || !strings.Contains(out, filepath.Base(dir)) {
+		t.Errorf("code %d, output %q; want exit 0, the folder name and the uploads line", code, out)
+	}
+}
+
+// TestRunOpenModeInProcess checks that --open prints a link without a token and says that
+// anyone on the network can open it.
+func TestRunOpenModeInProcess(t *testing.T) {
+	out, code := runInProcess(t, t.TempDir(), "--open", "--listen", fmt.Sprint(freePort(t)))
+	if code != 0 || strings.Contains(out, "yonder=") || !strings.Contains(out, "Anyone on this network can open this URL (--open)") {
+		t.Errorf("code %d, output %q; want exit 0, no token and the --open warning", code, out)
 	}
 }
