@@ -99,4 +99,6 @@ CI requires at least 85% total coverage on Linux. Please do not let it fall.
 3. The release workflow checks that CI passed for that commit, builds and publishes everything, and the package repositories update themselves within the hour. See [ARCHITECTURE.md](ARCHITECTURE.md#10-releases-and-distribution).
 4. Check the result: `yonder --version` after `brew upgrade`, `pip install -U yonder-cli`, and a look at the release page.
 
+The version in `npm/package.json` is only a placeholder: the release workflow sets the real one from the tag when it publishes.
+
 Never reuse or move a version tag: PyPI and npm do not allow a version number to be published twice.

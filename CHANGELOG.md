@@ -12,6 +12,7 @@ All notable changes to yonder are listed here. The format follows [Keep a Change
 - `YONDER_VERSION` for `install.sh`, to install a specific version.
 - A README for the npm package, and a clearer message when a download name is not a real release.
 - When the network gives the computer a public address, yonder now says so instead of "no network connection found".
+- Folder pages inside a subfolder have a `../` link to go back up.
 
 ### Changed
 - Folder listings keep the alphabetically first entries when a folder is cut at 5000, instead of an arbitrary few, and the page says the folder has more.
@@ -19,6 +20,7 @@ All notable changes to yonder are listed here. The format follows [Keep a Change
 - Test coverage rose from 78% to 92%.
 
 ### Fixed
+- When sharing a site on port 80, redirects to `http://localhost/...` (no port written) are now pointed back at the visitor. An `https://localhost/...` redirect, which means port 443, is left alone.
 - The share token no longer appears in the terminal log, even in a malformed query such as `?a;yonder=T`.
 - A response that sets its own `Referrer-Policy` can no longer replace yonder's `no-referrer` on requests that carry the token.
 - File downloads use the operating system's fast copy again; the request log had been hiding it.

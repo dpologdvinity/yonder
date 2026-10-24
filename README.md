@@ -120,7 +120,7 @@ The link, QR code and token work the same as when sharing a port.
 
 - Hidden files and folders (`.env`, `.git`, `.ssh`, anything starting with `.`) are never listed or served.
 - Symlinks inside the shared folder are skipped, and `..` cannot reach outside it.
-- Folder pages show the first 5000 entries, alphabetically, with folders first.
+- Folder pages show the first 5000 entries, alphabetically, with folders first. A subfolder page has a `../` link to go back up.
 - Share a dedicated folder, not your home directory.
 - Add `--upload` to let the other device send files into the folder: the page gets an Upload button (on a phone it opens the photo picker or Files). Existing files are never overwritten (`photo (1).jpg`), folder parts of a name are dropped (`../../x.txt` is saved as `x.txt`), hidden names are refused, and one upload is capped at 4 GB. Uploads are off unless you pass the flag. With uploads on, shared pages cannot run script (see [Is it safe?](#is-it-safe)).
 - A folder named like a number is a port to yonder: use `yonder ./3000`.
