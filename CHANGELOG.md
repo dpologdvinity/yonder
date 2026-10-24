@@ -4,6 +4,8 @@ All notable changes to yonder are listed here. The format follows [Keep a Change
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-24
+
 ### Added
 - `--for TIME` (for example `30m`, `2h`, `1d`; at most `7d`): stop sharing after that time. yonder prints when the link stops working, then says so and exits.
 - `--approve`: the owner allows each new device at the terminal before it can open anything. Devices are told apart by browser, wait on a page that reloads itself, and a refusal is final until restart. At most 10 devices can wait at once and 2 per address; a device that stops asking is forgotten after a minute. Typed-ahead input is discarded before each question.
@@ -101,7 +103,8 @@ All notable changes to yonder are listed here. The format follows [Keep a Change
 - First release: `yonder <port>` shares a local site on the network with a link and QR code. A reverse proxy rewrites `Host`, `Origin`, redirects and cookies, passes WebSockets and event streams through, and works with servers that listen only on IPv6.
 - A stable default port (shared port plus 10000), a request log, and a hint for WSL in NAT mode.
 
-[Unreleased]: https://github.com/dpologdvinity/yonder/compare/v0.4.4...HEAD
+[Unreleased]: https://github.com/dpologdvinity/yonder/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/dpologdvinity/yonder/compare/v0.4.4...v0.5.0
 [0.4.4]: https://github.com/dpologdvinity/yonder/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/dpologdvinity/yonder/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/dpologdvinity/yonder/compare/v0.4.1...v0.4.2

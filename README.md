@@ -14,7 +14,7 @@ yonder lets you open a website running on your own computer (`localhost`) from y
 ```sh
 curl -fsSL https://raw.githubusercontent.com/dpologdvinity/yonder/master/install.sh | sh
 ```
-The script checks the download's SHA-256 before installing. Set `YONDER_VERSION=0.4.4` to install a specific version, or `YONDER_INSTALL_DIR` to choose the folder.
+The script checks the download's SHA-256 before installing. Set `YONDER_VERSION=0.5.0` to install a specific version, or `YONDER_INSTALL_DIR` to choose the folder.
 
 **Homebrew** (macOS and Linux)
 ```sh
