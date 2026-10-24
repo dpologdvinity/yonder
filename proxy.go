@@ -95,13 +95,34 @@ func stripLocalhostCookieDomain(h http.Header) {
 	}
 }
 
+// quietKey is the context key under which withLog stores the flag that lets an inner handler
+// keep its request out of the log.
+type quietKey struct{}
+
+// quietFlag says whether a request should be left out of the log.
+type quietFlag struct{ on bool }
+
+// markQuiet keeps the request out of the log. The access gate uses it for the waiting page,
+// which a pending device reloads every two seconds and would otherwise bury the owner's
+// question under log lines. It does nothing outside withLog.
+func markQuiet(r *http.Request) {
+	if q, ok := r.Context().Value(quietKey{}).(*quietFlag); ok {
+		q.on = true
+	}
+}
+
 // withLog writes one line per request: time, method, path, status, client IP.
 func withLog(h http.Handler, w io.Writer, now func() time.Time) http.Handler {
 	return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		start := now()
 		rec := &statusRecorder{ResponseWriter: rw}
+		quiet := &quietFlag{}
+		r = r.WithContext(context.WithValue(r.Context(), quietKey{}, quiet))
 		// Deferred so a stream aborted with http.ErrAbortHandler still logs.
 		defer func() {
+			if quiet.on {
+				return
+			}
 			if rec.status == 0 {
 				rec.status = http.StatusOK
 			}
@@ -172,5 +193,36 @@ func newConnLogger(w io.Writer, now func() time.Time) func(net.Conn, http.ConnSt
 		}
 		seen[ip] = true
 		say(w, "%s  device connected  %s\n", now().Format("15:04:05"), ip)
+	}
+}
+
+// connTracker remembers connections that a handler has taken over (WebSockets), because
+// http.Server.Close leaves those open. It closes them when yonder stops.
+type connTracker struct {
+	mu    sync.Mutex
+	conns map[net.Conn]struct{}
+}
+
+// newConnTracker returns an empty tracker.
+func newConnTracker() *connTracker { return &connTracker{conns: map[net.Conn]struct{}{}} }
+
+// track is an http.Server ConnState hook: it remembers a connection when it is hijacked.
+func (t *connTracker) track(c net.Conn, s http.ConnState) {
+	if s != http.StateHijacked {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.conns[c] = struct{}{}
+}
+
+// closeAll closes every remembered connection once, and forgets them.
+func (t *connTracker) closeAll() {
+	t.mu.Lock()
+	conns := t.conns
+	t.conns = map[net.Conn]struct{}{}
+	t.mu.Unlock()
+	for c := range conns {
+		_ = c.Close() // best effort: the connection may already be gone
 	}
 }

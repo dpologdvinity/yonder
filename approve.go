@@ -5,16 +5,26 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"io"
+	"net"
 	"strings"
 	"sync"
+	"time"
 )
 
-// maxPendingDevices is how many devices may wait for an answer at the same time. It stops
-// someone who has the link from filling the owner's terminal with questions.
-const maxPendingDevices = 10
+const (
+	// maxPendingDevices is how many devices may wait for an answer at the same time. It stops
+	// someone who has the link from filling the owner's terminal with questions.
+	maxPendingDevices = 10
+	// maxPendingPerAddress is how many of those places one visitor address may hold, so that a
+	// single visitor in a loop cannot take every place and lock the others out.
+	maxPendingPerAddress = 2
+	// pendingTTL is how long a waiting device may go without its page reloading before it is
+	// forgotten: a closed tab or a link-preview bot must not hold a place for ever. The waiting
+	// page reloads every two seconds, so a real visitor never gets near this.
+	pendingTTL = 60 * time.Second
+)
 
 // deviceState is where a device stands: waiting for the owner, allowed, or refused.
 type deviceState int
@@ -31,9 +41,11 @@ const (
 // device is one browser profile that has opened the link.
 type device struct {
 	id        string
-	addr      string // the visitor's address, for the owner's question
+	addr      string // the visitor's address with its port, for the owner's question
+	host      string // the visitor's address without the port, to limit places per visitor
 	userAgent string // the browser's own description of itself; never printed as it is
 	state     deviceState
+	lastSeen  time.Time // when a waiting device last asked, to forget the ones that left
 }
 
 // deviceTable remembers every device seen during one run and queues the new ones for the
@@ -44,25 +56,42 @@ type deviceTable struct {
 	pending int
 	queue   []*device     // devices not yet asked about, in arrival order
 	wake    chan struct{} // tells next() that the queue has something new
+	now     func() time.Time
 }
 
-// newDeviceTable returns an empty table.
+// newDeviceTable returns an empty table that tells time with the system clock.
 func newDeviceTable() *deviceTable {
 	return &deviceTable{
 		devices: map[string]*device{},
 		wake:    make(chan struct{}, 1),
+		now:     time.Now,
 	}
 }
 
 // begin records a new device in the pending state and queues it for the owner's question. It
-// returns the device's id, or false when maxPendingDevices devices are already waiting.
+// returns the device's id, or false when too many devices are waiting, in total or from this
+// address. Devices that stopped waiting are forgotten first.
 func (t *deviceTable) begin(addr, userAgent string) (string, bool) {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.forgetLeavers()
 	if t.pending >= maxPendingDevices {
 		return "", false
 	}
-	d := &device{id: newToken(), addr: addr, userAgent: userAgent, state: devPending}
+	fromHost := 0
+	for _, d := range t.devices {
+		if d.state == devPending && d.host == host {
+			fromHost++
+		}
+	}
+	if fromHost >= maxPendingPerAddress {
+		return "", false
+	}
+	d := &device{id: newToken(), addr: addr, host: host, userAgent: userAgent, state: devPending, lastSeen: t.now()}
 	t.devices[d.id] = d
 	t.pending++
 	t.queue = append(t.queue, d)
@@ -71,6 +100,34 @@ func (t *deviceTable) begin(addr, userAgent string) (string, bool) {
 	default: // a wake-up is already waiting
 	}
 	return d.id, true
+}
+
+// forgetLeavers removes waiting devices that have not been seen for pendingTTL, from the table
+// and from the queue of questions. The caller must hold t.mu.
+func (t *deviceTable) forgetLeavers() {
+	cutoff := t.now().Add(-pendingTTL)
+	for id, d := range t.devices {
+		if d.state == devPending && d.lastSeen.Before(cutoff) {
+			delete(t.devices, id)
+			t.pending--
+		}
+	}
+	kept := t.queue[:0]
+	for _, d := range t.queue {
+		if _, alive := t.devices[d.id]; alive {
+			kept = append(kept, d)
+		}
+	}
+	t.queue = kept
+}
+
+// touch records that a waiting device just asked again, so it is not forgotten.
+func (t *deviceTable) touch(id string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if d, ok := t.devices[id]; ok && d.state == devPending {
+		d.lastSeen = t.now()
+	}
 }
 
 // state returns the state of the device with this id, and whether the id is known at all.
@@ -111,6 +168,7 @@ func (t *deviceTable) decide(id string, allow bool) {
 func (t *deviceTable) next(ctx context.Context) *device {
 	for {
 		t.mu.Lock()
+		t.forgetLeavers()
 		if len(t.queue) > 0 {
 			d := t.queue[0]
 			t.queue = t.queue[1:]
@@ -128,18 +186,19 @@ func (t *deviceTable) next(ctx context.Context) *device {
 
 // runPrompts asks the owner about each waiting device, one at a time and in the order they
 // arrived, reading answers from in and writing questions to out. "y" or "yes" (in any case)
-// allows the device; anything else, including the end of the input, refuses it. It returns
-// when ctx ends.
+// allows the device; anything else, including the end of the input, refuses it. Input typed
+// before a question appears is thrown away, so a stray key cannot answer a question the owner
+// has not seen. It returns when ctx ends, except that it cannot interrupt a read in progress:
+// the goroutine ends with the process.
 func runPrompts(ctx context.Context, in io.Reader, out io.Writer, t *deviceTable) {
-	answers := bufio.NewReader(in)
 	for {
 		d := t.next(ctx)
 		if d == nil {
 			return
 		}
-		say(out, "\nAllow %s at %s to open this? [y/N] ", describeUserAgent(d.userAgent), d.addr)
-		line, _ := answers.ReadString('\n') // on end of input the line is empty, which means "no"
-		switch strings.ToLower(strings.TrimSpace(line)) {
+		flushInput(in)
+		say(out, "\nAllow %s at %s to open this? [y/N] ", describeUserAgent(d.userAgent), d.host)
+		switch strings.ToLower(strings.TrimSpace(readLine(in))) { // end of input gives "", which means no
 		case "y", "yes":
 			t.decide(d.id, true)
 			say(out, "Allowed.\n")
@@ -148,6 +207,27 @@ func runPrompts(ctx context.Context, in io.Reader, out io.Writer, t *deviceTable
 			say(out, "Refused.\n")
 		}
 	}
+}
+
+// readLine reads one line from r a byte at a time, so that nothing after the line is consumed
+// and read ahead. It returns the line without its newline; at the end of the input it returns
+// whatever was read.
+func readLine(r io.Reader) string {
+	var line []byte
+	one := make([]byte, 1)
+	for {
+		n, err := r.Read(one)
+		if n == 1 {
+			if one[0] == '\n' {
+				break
+			}
+			line = append(line, one[0])
+		}
+		if err != nil {
+			break
+		}
+	}
+	return strings.TrimSuffix(string(line), "\r")
 }
 
 // describeUserAgent names the browser and system in a User-Agent header for the owner's

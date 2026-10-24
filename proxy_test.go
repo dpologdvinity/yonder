@@ -477,3 +477,47 @@ func TestProxyLocationRewritePort80OnlyForHTTP(t *testing.T) {
 		t.Errorf("got %q, want the https redirect left alone", got)
 	}
 }
+
+// TestWithLogSkipsQuietRequests checks that a request the gate marks as quiet (a waiting page
+// reloading every two seconds) is not logged, while ordinary requests still are.
+func TestWithLogSkipsQuietRequests(t *testing.T) {
+	var log strings.Builder
+	h := withLog(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/quiet" {
+			markQuiet(r)
+		}
+	}), &log, time.Now)
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/quiet", nil))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/loud", nil))
+	if strings.Contains(log.String(), "/quiet") || !strings.Contains(log.String(), "GET /loud") {
+		t.Errorf("log = %q, want only the /loud request", log.String())
+	}
+}
+
+// closeCounter is a net.Conn that counts how often it was closed.
+type closeCounter struct {
+	net.Conn
+	closed int
+}
+
+// Close counts the call instead of closing anything.
+func (c *closeCounter) Close() error { c.closed++; return nil }
+
+// TestConnTrackerClosesHijackedConnections checks that connections taken over by a handler
+// (WebSockets) are closed when the server stops, because http.Server.Close leaves them open.
+func TestConnTrackerClosesHijackedConnections(t *testing.T) {
+	tr := newConnTracker()
+	ws, plain := &closeCounter{}, &closeCounter{}
+	tr.track(ws, http.StateNew)
+	tr.track(ws, http.StateHijacked)
+	tr.track(plain, http.StateNew)
+	tr.track(plain, http.StateClosed)
+	tr.closeAll()
+	if ws.closed != 1 || plain.closed != 0 {
+		t.Errorf("closed: websocket %d, ordinary %d; want 1 and 0", ws.closed, plain.closed)
+	}
+	tr.closeAll() // a second call must not close again
+	if ws.closed != 1 {
+		t.Errorf("a second closeAll closed the connection again (%d)", ws.closed)
+	}
+}

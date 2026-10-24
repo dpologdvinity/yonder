@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -15,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -431,5 +433,111 @@ func TestRunApproveEndToEnd(t *testing.T) {
 			t.Fatalf("bob after refusal: %d, want 403", code)
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// TestExpireAtFiresAfterTheDuration checks that the context ends, with the time-is-up cause,
+// once the duration has passed, and not earlier.
+func TestExpireAtFiresAfterTheDuration(t *testing.T) {
+	ctx, cancel := expireAt(context.Background(), 150*time.Millisecond, time.Now)
+	defer cancel(nil)
+	select {
+	case <-ctx.Done():
+		t.Fatal("the context ended at once")
+	case <-time.After(50 * time.Millisecond):
+	}
+	select {
+	case <-ctx.Done():
+		if !errors.Is(context.Cause(ctx), errTimeUp) {
+			t.Errorf("cause = %v, want errTimeUp", context.Cause(ctx))
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the context never ended")
+	}
+}
+
+// TestExpireAtNoticesTheWallClockJumping checks the sleeping-laptop case: the timer that
+// counts running time has not fired, but the wall clock has passed the deadline, so the
+// context must end anyway.
+func TestExpireAtNoticesTheWallClockJumping(t *testing.T) {
+	old := clockCheckEvery
+	clockCheckEvery = 10 * time.Millisecond
+	defer func() { clockCheckEvery = old }()
+	var mu sync.Mutex
+	clock := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
+	now := func() time.Time { mu.Lock(); defer mu.Unlock(); return clock }
+	ctx, cancel := expireAt(context.Background(), time.Hour, now)
+	defer cancel(nil)
+	time.Sleep(50 * time.Millisecond)
+	if ctx.Err() != nil {
+		t.Fatal("the context ended before the deadline")
+	}
+	mu.Lock()
+	clock = clock.Add(2 * time.Hour) // the laptop slept
+	mu.Unlock()
+	select {
+	case <-ctx.Done():
+		if !errors.Is(context.Cause(ctx), errTimeUp) {
+			t.Errorf("cause = %v, want errTimeUp", context.Cause(ctx))
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a jump of the wall clock past the deadline was not noticed")
+	}
+}
+
+// TestExpireAtKeepsTheParentsCause checks that when the parent context is cancelled first (the
+// owner pressed Ctrl-C), the cause is not "time is up", so the right message is printed.
+func TestExpireAtKeepsTheParentsCause(t *testing.T) {
+	parent, stop := context.WithCancel(context.Background())
+	ctx, cancel := expireAt(parent, time.Hour, time.Now)
+	defer cancel(nil)
+	stop()
+	<-ctx.Done()
+	if errors.Is(context.Cause(ctx), errTimeUp) {
+		t.Error("an early Ctrl-C was reported as the time being up")
+	}
+}
+
+// TestHumanDuration checks how the time limit is shown in the banner: short and readable, with
+// days for long limits.
+func TestHumanDuration(t *testing.T) {
+	tests := map[time.Duration]string{
+		30 * time.Minute: "30m", 2 * time.Hour: "2h", 90 * time.Second: "1m30s", 1500 * time.Millisecond: "1.5s",
+		90 * time.Minute: "1h30m", 24 * time.Hour: "1d", 36 * time.Hour: "1d12h", 25 * time.Hour: "1d1h", 7 * 24 * time.Hour: "7d",
+	}
+	for d, want := range tests {
+		if got := humanDuration(d); got != want {
+			t.Errorf("humanDuration(%v) = %q, want %q", d, got, want)
+		}
+	}
+}
+
+// TestFormatUntil checks that the end time shows only the clock for limits under a day, and
+// the weekday and date as well for longer ones, which would otherwise be ambiguous.
+func TestFormatUntil(t *testing.T) {
+	start := time.Date(2026, 10, 24, 14, 30, 0, 0, time.UTC)
+	if got := formatUntil(start, 90*time.Minute); got != "16:00" {
+		t.Errorf("short limit: %q, want 16:00", got)
+	}
+	if got := formatUntil(start, 7*24*time.Hour); got != "Sat 31 Oct 14:30" {
+		t.Errorf("long limit: %q, want Sat 31 Oct 14:30", got)
+	}
+}
+
+// TestRunStopsServingAfterTheTimeIsUp checks that when --for ends, the port is really closed
+// and not just reported closed: nobody can connect to it afterwards.
+func TestRunStopsServingAfterTheTimeIsUp(t *testing.T) {
+	port := freePort(t)
+	var out, errOut syncBuf
+	code := run([]string{t.TempDir(), "--for", "700ms", "--listen", fmt.Sprint(port)}, strings.NewReader(""), &out, &errOut, context.Background())
+	if strings.Contains(errOut.String(), "no network connection") || strings.Contains(errOut.String(), "public address") {
+		t.Skip("no private network address on this machine")
+	}
+	if code != 0 {
+		t.Fatalf("code %d, stderr %q", code, errOut.String())
+	}
+	if conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), time.Second); err == nil {
+		_ = conn.Close()
+		t.Error("the port still accepts connections after the time was up")
 	}
 }

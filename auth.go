@@ -94,6 +94,8 @@ func withAuthDevices(h http.Handler, token string, listenPort int, devices *devi
 		if devices != nil {
 			switch st, _ := devices.state(deviceID); st {
 			case devPending:
+				devices.touch(deviceID) // it is still there: keep its place
+				markQuiet(r)            // it reloads every two seconds: do not bury the owner's question
 				waitingPage(w)
 				return
 			case devDenied:

@@ -242,7 +242,7 @@ func chooseTarget(opts options) (shareTarget, error) {
 // the server fails. A normal stop returns nil.
 func serve(ctx context.Context, opts options, stdin io.Reader, stdout io.Writer) error {
 	if opts.approve && !canAsk(stdin) {
-		return errors.New("--approve needs a terminal to ask you on")
+		return errors.New("--approve needs a terminal to ask you on, and yonder must be running in the foreground")
 	}
 	share, err := chooseTarget(opts)
 	if err != nil {
@@ -283,22 +283,28 @@ func serve(ctx context.Context, opts options, stdin io.Reader, stdout io.Writer)
 	printBanner(stdout, opts, share.what, addrs, actual, suffix, warning)
 
 	if opts.forDur > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, opts.forDur)
-		defer cancel()
+		var cancel context.CancelCauseFunc
+		ctx, cancel = expireAt(ctx, opts.forDur, time.Now)
+		defer cancel(nil)
 	}
+	tracker := newConnTracker()
+	logConn := newConnLogger(stdout, time.Now)
 
 	// No write timeout: SSE and WebSockets are long-lived. The header timeout stops slowloris.
-	srv := &http.Server{Handler: withLog(handler, stdout, time.Now), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute, ConnState: newConnLogger(stdout, time.Now)}
+	srv := &http.Server{Handler: withLog(handler, stdout, time.Now), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute, ConnState: func(c net.Conn, s http.ConnState) {
+		logConn(c, s)
+		tracker.track(c, s)
+	}}
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(ln) }()
 	select {
 	case <-ctx.Done():
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		if errors.Is(context.Cause(ctx), errTimeUp) {
 			say(stdout, "\nThe time is up, so yonder is stopping.\n")
 		}
 		// Close, not Shutdown: Shutdown waits on hijacked WebSocket connections.
-		_ = srv.Close() // best effort: the process is about to exit
+		_ = srv.Close()    // best effort: the process is about to exit
+		tracker.closeAll() // Close leaves WebSocket connections open; they must not outlive the share
 		// Let half-finished uploads remove their temp files before the shared folder closes.
 		waitUploads(3 * time.Second)
 		return nil
@@ -321,7 +327,7 @@ func printBanner(w io.Writer, opts options, what string, addrs []net.IP, port in
 		say(w, "Uploads are on: files sent from other devices land in %s.\n", what)
 	}
 	if opts.forDur > 0 {
-		say(w, "This link works for %s, until %s.\n", opts.forDur, time.Now().Add(opts.forDur).Format("15:04"))
+		say(w, "This link works for %s, until %s.\n", humanDuration(opts.forDur), formatUntil(time.Now(), opts.forDur))
 	}
 	if hint := detectWSLHint(); hint != "" {
 		say(w, "\n%s", hint)
@@ -378,8 +384,76 @@ func say(w io.Writer, format string, args ...any) { _, _ = fmt.Fprintf(w, format
 
 // canAsk reports whether yonder can ask the owner questions on in. Anything that is not a file
 // (a pipe, or a string in a test) can be read, but a file such as /dev/null or a redirect has
-// nobody behind it, so only a real terminal counts.
+// nobody behind it, so only a real terminal counts, and only while yonder is in the foreground
+// of it: a background job that reads its terminal is stopped by the shell, server and all.
 func canAsk(in io.Reader) bool {
 	f, ok := in.(*os.File)
-	return !ok || term.IsTerminal(int(f.Fd()))
+	return !ok || (term.IsTerminal(int(f.Fd())) && inForeground(f))
+}
+
+// errTimeUp is the cause of the context that expireAt ends when the --for time has passed.
+var errTimeUp = errors.New("the time is up")
+
+// clockCheckEvery is how often expireAt compares the wall clock with the deadline. A variable
+// so tests can shorten it.
+var clockCheckEvery = 2 * time.Second
+
+// expireAt returns a context that ends with the cause errTimeUp after d, or earlier if parent
+// ends (then with parent's cause). It watches two clocks: a timer, which counts running time,
+// and the wall clock, checked every clockCheckEvery. On Linux the timer stops while the computer
+// sleeps, so a link meant to last an hour would otherwise live on after the laptop is opened
+// again; the wall clock check ends it at the time the owner was told.
+func expireAt(parent context.Context, d time.Duration, now func() time.Time) (context.Context, context.CancelCauseFunc) {
+	ctx, cancel := context.WithCancelCause(parent)
+	deadline := now().Round(0).Add(d) // Round(0) drops the timer reading, leaving wall-clock time
+	timer := time.AfterFunc(d, func() { cancel(errTimeUp) })
+	go func() {
+		defer timer.Stop()
+		tick := time.NewTicker(clockCheckEvery)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				if !now().Round(0).Before(deadline) {
+					cancel(errTimeUp)
+					return
+				}
+			}
+		}
+	}()
+	return ctx, cancel
+}
+
+// humanDuration writes d for people: "30m", "2h", "1m30s", "1d12h", "7d". Whole days are
+// shown as "d", which Go's own format lacks.
+func humanDuration(d time.Duration) string {
+	var b strings.Builder
+	if days := d / (24 * time.Hour); days > 0 {
+		fmt.Fprintf(&b, "%dd", days)
+		d -= days * 24 * time.Hour
+	}
+	if h := d / time.Hour; h > 0 {
+		fmt.Fprintf(&b, "%dh", h)
+		d -= h * time.Hour
+	}
+	if m := d / time.Minute; m > 0 {
+		fmt.Fprintf(&b, "%dm", m)
+		d -= m * time.Minute
+	}
+	if d > 0 {
+		b.WriteString(d.String())
+	}
+	return b.String()
+}
+
+// formatUntil writes the moment start+d for the banner: just the clock time for a limit under a
+// day, and the weekday and date as well for longer ones, which would be ambiguous.
+func formatUntil(start time.Time, d time.Duration) string {
+	end := start.Add(d)
+	if d < 24*time.Hour {
+		return end.Format("15:04")
+	}
+	return end.Format("Mon 2 Jan 15:04")
 }
