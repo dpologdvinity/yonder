@@ -1,5 +1,10 @@
+# GoReleaser configuration: how a release is built and packaged. The release workflow
+# (.github/workflows/release.yml) runs it for every v* tag, and ci.yml runs it as a dry run.
+# Docs: https://goreleaser.com
+
 version: 2
 
+# One static binary per operating system and CPU. The version is stamped into main.version.
 builds:
   - env:
       - CGO_ENABLED=0
@@ -17,14 +22,18 @@ archives:
       - goos: windows
         formats: [zip]
 
+# checksums.txt lists the SHA-256 of every file; the installers verify downloads with it.
 checksum:
   name_template: checksums.txt
 
+# Where the GitHub release is published. Set explicitly because the config check runs without a
+# git remote.
 release:
   github:
     owner: dpologdvinity
     name: yonder
 
+# Native packages for Debian, Fedora and Arch. The package repositories pick these up.
 nfpms:
   - package_name: yonder
     file_name_template: "{{ .ConventionalFileName }}"

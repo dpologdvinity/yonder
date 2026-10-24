@@ -1,9 +1,12 @@
+# Build output
 /yonder
 /yonder.exe
 /dist/
 npm/bin/yonder
 npm/bin/yonder.exe
 npm/*.tgz
+
+# Secrets and generated files: never commit these
 .env
 __pycache__/
 *.pyc

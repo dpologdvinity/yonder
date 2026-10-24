@@ -7,6 +7,8 @@
 set -eu
 
 # Everything runs inside main, called on the last line, so a truncated download runs nothing.
+# main finds the latest (or pinned) release for this machine, downloads it, verifies its
+# checksum, and installs the binary. It exits with 1 and a message on any problem.
 main() {
 
   repo="dpologdvinity/yonder"

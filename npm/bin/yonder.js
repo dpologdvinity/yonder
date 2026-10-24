@@ -1,5 +1,13 @@
 #!/usr/bin/env node
 "use strict";
+
+/**
+ * The `yonder` command installed by the yonder-cli npm package.
+ *
+ * It makes sure the real yonder binary is present (downloading it on first run if the install
+ * script did not), runs it with the same arguments, and forwards termination signals to it so
+ * that stopping this wrapper always stops the share. The exit code is yonder's own.
+ */
 const { spawn } = require("child_process");
 const { install } = require("../install.js");
 

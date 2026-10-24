@@ -30,11 +30,16 @@ PLATFORMS = {
 
 
 def fetch(url: str) -> bytes:
+    """Download url and return its content."""
     with urllib.request.urlopen(url) as r:
         return r.read()
 
 
 def binary_from(archive: bytes, suffix: str) -> tuple[str, bytes]:
+    """Return the name and content of the yonder executable inside a release archive.
+
+    suffix says which kind of archive it is: a .zip for Windows, a .tar.gz otherwise.
+    """
     if suffix.endswith(".zip"):
         with zipfile.ZipFile(io.BytesIO(archive)) as z:
             return "yonder.exe", z.read("yonder.exe")
@@ -46,11 +51,17 @@ def binary_from(archive: bytes, suffix: str) -> tuple[str, bytes]:
 
 
 def record_line(path: str, data: bytes) -> str:
+    """Return the RECORD line for one file: its path, SHA-256 (URL-safe base64) and size."""
     digest = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode()
     return f"{path},sha256={digest},{len(data)}"
 
 
 def build(version: str, outdir: Path) -> list[Path]:
+    """Build one wheel per platform for the given release version into outdir.
+
+    Every download is checked against the release's checksums.txt first. Returns the paths of
+    the wheels written.
+    """
     base = f"https://github.com/{REPO}/releases/download/v{version}"
     sums: dict[str, str] = {}
     for line in fetch(f"{base}/checksums.txt").decode().splitlines():
