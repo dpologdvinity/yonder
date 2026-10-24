@@ -4,6 +4,8 @@ package main
 
 import (
 	"net"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -26,4 +28,9 @@ func freePort(t *testing.T) int {
 	port := ln.Addr().(*net.TCPAddr).Port
 	must(t, ln.Close())
 	return port
+}
+
+// writeFile creates the file name in dir with the given content.
+func writeFile(dir, name, content string) error {
+	return os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644)
 }
