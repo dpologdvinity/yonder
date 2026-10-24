@@ -79,7 +79,7 @@ func withTunnelEdge(next http.Handler) http.Handler {
 			country = ""
 		}
 		r = r.WithContext(context.WithValue(r.Context(), edgeKey{}, edgeInfo{secure: true, country: country}))
-		if ip != nil {
+		if ip != nil { // without the header the address stays the loopback one and all such visitors share one group
 			r.RemoteAddr = net.JoinHostPort(ip.String(), "0") // the port is unknown; callers only need the host
 		}
 		next.ServeHTTP(w, r)

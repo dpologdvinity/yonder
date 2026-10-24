@@ -29,8 +29,30 @@ Then run yonder again`
 // public address is printed earlier and does not work until then.
 var tunnelReadyRe = regexp.MustCompile(`Registered tunnel connection`)
 
-// tunnelURLRe finds the address of a Cloudflare quick tunnel in cloudflared's output.
+// tunnelURLRe finds addresses under trycloudflare.com in cloudflared's output.
 var tunnelURLRe = regexp.MustCompile(`https://[a-z0-9-]+\.trycloudflare\.com`)
+
+// cloudflareAPIURL is Cloudflare's own service, which cloudflared names in some error messages.
+// It is not a tunnel, so it is never taken for the public address.
+const cloudflareAPIURL = "https://api.trycloudflare.com"
+
+// findTunnelURL returns the address of the quick tunnel named in a line of cloudflared's output,
+// or "" when the line names none.
+func findTunnelURL(line string) string {
+	for _, u := range tunnelURLRe.FindAllString(line, -1) {
+		if u != cloudflareAPIURL {
+			return u
+		}
+	}
+	return ""
+}
+
+// maxTunnelLine is how much of one line of cloudflared's output is kept. The rest of a longer
+// line is skipped, so a huge line can never stop yonder from reading what follows.
+const maxTunnelLine = 64 * 1024
+
+// stopWait is how long stop waits for cloudflared to be gone before giving up.
+const stopWait = 5 * time.Second
 
 // tunnelOutputLines is how many of the last lines cloudflared printed are kept to explain a
 // failure.
@@ -42,7 +64,11 @@ type tunnel struct {
 	URL string
 	// done receives cloudflared's exit status when it stops, for whatever reason.
 	done <-chan error
-	// stop ends cloudflared. It is safe to call more than once.
+	// exited is closed once the cloudflared process has ended and been waited for.
+	exited <-chan struct{}
+	// stop ends cloudflared and waits (a few seconds at most) until it has ended, because
+	// yonder exits right after and an unfinished kill could leave the process running. It is
+	// safe to call more than once.
 	stop func()
 }
 
@@ -80,13 +106,24 @@ func startTunnel(ctx context.Context, path, localAddr string, wait time.Duration
 	urls := make(chan string, 1)
 	ready := make(chan struct{}, 1)
 	done := make(chan error, 1)
+	exited := make(chan struct{})
 	lines := &lastLines{max: tunnelOutputLines}
+	// halt ends cloudflared and waits for it to be gone.
+	halt := func() {
+		cancel()
+		select {
+		case <-exited:
+		case <-time.After(stopWait):
+		}
+	}
 	go func() {
-		scanner := bufio.NewScanner(stderr)
-		for scanner.Scan() { // keep reading for as long as cloudflared runs, or it would block
-			line := scanner.Text()
-			lines.add(line)
-			if u := tunnelURLRe.FindString(line); u != "" {
+		reader := bufio.NewReader(stderr)
+		for { // keep reading for as long as cloudflared runs, or it would block
+			line, err := readCapped(reader, maxTunnelLine)
+			if line != "" {
+				lines.add(line)
+			}
+			if u := findTunnelURL(line); u != "" {
 				select {
 				case urls <- u:
 				default:
@@ -98,8 +135,13 @@ func startTunnel(ctx context.Context, path, localAddr string, wait time.Duration
 				default:
 				}
 			}
+			if err != nil {
+				break
+			}
 		}
-		done <- cmd.Wait()
+		werr := cmd.Wait()
+		close(exited)
+		done <- werr
 	}()
 
 	deadline := time.After(wait)
@@ -110,20 +152,36 @@ func startTunnel(ctx context.Context, path, localAddr string, wait time.Duration
 		case <-ready:
 			connected = true
 		case err := <-done:
-			cancel()
+			halt()
 			return nil, fmt.Errorf("cloudflared stopped before the tunnel was ready (%w)%s", err, lines.describe())
 		case <-deadline:
-			cancel()
+			halt()
 			if url == "" {
 				return nil, fmt.Errorf("cloudflared gave no public address within %s%s", wait, lines.describe())
 			}
 			return nil, fmt.Errorf("the tunnel %s did not connect within %s%s", url, wait, lines.describe())
 		case <-ctx.Done():
-			cancel()
+			halt()
 			return nil, ctx.Err()
 		}
 	}
-	return &tunnel{URL: url, done: done, stop: cancel}, nil
+	return &tunnel{URL: url, done: done, exited: exited, stop: halt}, nil
+}
+
+// readCapped reads one line from r, without its newline, and keeps at most max bytes of it; the
+// rest of a longer line is read and thrown away. It returns the error that ended the reading,
+// together with any text read before it.
+func readCapped(r *bufio.Reader, max int) (string, error) {
+	var line []byte
+	for {
+		chunk, more, err := r.ReadLine()
+		if room := max - len(line); room > 0 {
+			line = append(line, chunk[:min(room, len(chunk))]...)
+		}
+		if !more || err != nil {
+			return string(line), err
+		}
+	}
 }
 
 // lastLines keeps the last few lines of a program's output, safe for use from two goroutines.
@@ -156,10 +214,13 @@ func (l *lastLines) describe() string {
 }
 
 // printable returns s with every control character removed, so text from another program
-// cannot move the cursor or change the colours of the owner's terminal.
+// cannot move the cursor, change the colours of the owner's terminal, or reorder the text. That
+// covers the C0 and C1 controls (U+009B starts an escape sequence on terminals that read 8-bit
+// codes) and the bidirectional overrides and isolates.
 func printable(s string) string {
 	return strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
+		switch {
+		case r < 0x20, r >= 0x7f && r <= 0x9f, r >= 0x202a && r <= 0x202e, r >= 0x2066 && r <= 0x2069:
 			return -1
 		}
 		return r

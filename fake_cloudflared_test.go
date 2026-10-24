@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -24,6 +25,8 @@ const (
 	fakeModeEnv = "YONDER_FAKE_CLOUDFLARED"
 	// fakeBehaviorEnv is the environment variable that says how the fake should behave.
 	fakeBehaviorEnv = "YONDER_FAKE_BEHAVIOR"
+	// fakePidFileEnv names a file the fake writes its process id to, when set.
+	fakePidFileEnv = "YONDER_FAKE_PIDFILE"
 )
 
 // TestMain runs the fake cloudflared when the test binary was started as one, and the normal
@@ -42,7 +45,7 @@ func TestMain(m *testing.M) {
 // CF-Connecting-IP header and an X-Test-Country header into CF-IPCountry. The behavior
 // variable can make it print no address ("nourl"), exit at once ("crash"), or exit two
 // seconds after printing its address ("dieslate"), or print the address but never register the
-// tunnel ("noregister"). Otherwise it registers 300 ms after printing the address.
+// tunnel ("noregister"), or print one 200 000-character line first ("longline"). Otherwise it registers 300 ms after printing the address.
 func runFakeCloudflared() {
 	target := ""
 	for i, a := range os.Args {
@@ -50,7 +53,13 @@ func runFakeCloudflared() {
 			target = os.Args[i+1]
 		}
 	}
+	if f := os.Getenv(fakePidFileEnv); f != "" {
+		_ = os.WriteFile(f, []byte(fmt.Sprint(os.Getpid())), 0o600)
+	}
 	fmt.Fprintln(os.Stderr, "INF Requesting new quick Tunnel on trycloudflare.com...")
+	if os.Getenv(fakeBehaviorEnv) == "longline" {
+		fmt.Fprintln(os.Stderr, strings.Repeat("x", 200_000)) // longer than a line reader's usual limit
+	}
 	switch os.Getenv(fakeBehaviorEnv) {
 	case "crash":
 		fmt.Fprintln(os.Stderr, "ERR something broke")

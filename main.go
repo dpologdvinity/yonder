@@ -263,7 +263,11 @@ func chooseTarget(opts options) (shareTarget, error) {
 // tunnel stops, or the server fails. A normal stop returns nil.
 func serve(ctx context.Context, opts options, stdin io.Reader, stdout io.Writer) error {
 	if opts.approve && !canAsk(stdin) {
-		return errors.New("--approve needs a terminal to ask you on, and yonder must be running in the foreground")
+		msg := "--approve needs a terminal to ask you on, and yonder must be running in the foreground"
+		if opts.public {
+			msg = "--public asks you to approve each device, which needs a terminal to ask you on, and yonder must be running in the foreground (--no-approve turns the questions off)"
+		}
+		return errors.New(msg)
 	}
 	cloudflared := ""
 	if opts.public {

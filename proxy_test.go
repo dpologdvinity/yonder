@@ -145,13 +145,13 @@ func TestProxyLocationRewrite(t *testing.T) {
 func TestProxyLocationRewritePort80(t *testing.T) {
 	for _, host := range []string{"localhost", "127.0.0.1", "[::1]"} {
 		h := http.Header{"Location": {"http://" + host + "/login"}}
-		rewriteLocation(h, 80, "192.168.1.50:8080")
+		rewriteLocation(h, 80, "http", "192.168.1.50:8080")
 		if got := h.Get("Location"); got != "http://192.168.1.50:8080/login" {
 			t.Errorf("port 80: got %q, want http://192.168.1.50:8080/login", got)
 		}
 
 		h3000 := http.Header{"Location": {"http://" + host + "/login"}}
-		rewriteLocation(h3000, 3000, "192.168.1.50:8080")
+		rewriteLocation(h3000, 3000, "http", "192.168.1.50:8080")
 		if got := h3000.Get("Location"); got != "http://"+host+"/login" {
 			t.Errorf("port 3000: got %q, want http://%s/login untouched", got, host)
 		}
@@ -472,7 +472,7 @@ func TestStatusRecorderReadFromFallback(t *testing.T) {
 // so the redirect must be left alone.
 func TestProxyLocationRewritePort80OnlyForHTTP(t *testing.T) {
 	h := http.Header{"Location": {"https://localhost/login"}}
-	rewriteLocation(h, 80, "192.168.1.50:8080")
+	rewriteLocation(h, 80, "http", "192.168.1.50:8080")
 	if got := h.Get("Location"); got != "https://localhost/login" {
 		t.Errorf("got %q, want the https redirect left alone", got)
 	}

@@ -18,9 +18,13 @@ import (
 	"time"
 )
 
-// clientHostKey is the context key under which the proxy stores the host name the visitor used,
-// so redirects from the app can be pointed back at it.
-type clientHostKey struct{}
+// clientKey is the context key under which the proxy stores how the visitor reached it, so
+// redirects from the app can be pointed back the same way.
+type clientKey struct{}
+
+// clientSite is the scheme ("http" on the network, "https" through the tunnel) and host name
+// (with port) that the visitor used.
+type clientSite struct{ scheme, host string }
 
 // newProxy forwards to targetAddr while making the request look local,
 // so dev servers that check Host or Origin accept it.
@@ -33,14 +37,18 @@ func newProxy(targetAddr string, port int) *httputil.ReverseProxy {
 			pr.SetURL(target)
 			pr.Out.Host = local
 			// Only same-site Origins: rewriting others would defeat the dev server's CSRF checks.
-			if pr.Out.Header.Get("Origin") == "http://"+pr.In.Host {
+			site := clientSite{scheme: "http", host: pr.In.Host}
+			if requestIsSecure(pr.In) {
+				site.scheme = "https"
+			}
+			if pr.Out.Header.Get("Origin") == site.scheme+"://"+site.host {
 				pr.Out.Header.Set("Origin", "http://"+local)
 			}
-			pr.Out = pr.Out.WithContext(context.WithValue(pr.Out.Context(), clientHostKey{}, pr.In.Host))
+			pr.Out = pr.Out.WithContext(context.WithValue(pr.Out.Context(), clientKey{}, site))
 		},
 		ModifyResponse: func(resp *http.Response) error {
-			client, _ := resp.Request.Context().Value(clientHostKey{}).(string)
-			rewriteLocation(resp.Header, port, client)
+			site, _ := resp.Request.Context().Value(clientKey{}).(clientSite)
+			rewriteLocation(resp.Header, port, site.scheme, site.host)
 			stripLocalhostCookieDomain(resp.Header)
 			return nil
 		},
@@ -52,8 +60,9 @@ func newProxy(targetAddr string, port int) *httputil.ReverseProxy {
 	}
 }
 
-// rewriteLocation points redirects to the local target back at the host the client used.
-func rewriteLocation(h http.Header, port int, client string) {
+// rewriteLocation points redirects to the local target back at the host the client used, with
+// the scheme the client used (scheme "https" keeps a tunnel visitor on https).
+func rewriteLocation(h http.Header, port int, scheme, client string) {
 	loc := h.Get("Location")
 	if loc == "" || client == "" {
 		return
@@ -71,7 +80,7 @@ func rewriteLocation(h http.Header, port int, client string) {
 		match = port == 80 && strings.EqualFold(u.Scheme, "http")
 	}
 	if match {
-		u.Scheme, u.Host = "http", client
+		u.Scheme, u.Host = scheme, client
 		h.Set("Location", u.String())
 	}
 }

@@ -56,8 +56,9 @@ type deviceTable struct {
 	mu      sync.Mutex
 	devices map[string]*device
 	pending int
-	queue   []*device     // devices not yet asked about, in arrival order
-	wake    chan struct{} // tells next() that the queue has something new
+	refused map[string]bool // visitor groups (see addrGroup) the owner has refused; they cannot ask again
+	queue   []*device       // devices not yet asked about, in arrival order
+	wake    chan struct{}   // tells next() that the queue has something new
 	now     func() time.Time
 }
 
@@ -65,6 +66,7 @@ type deviceTable struct {
 func newDeviceTable() *deviceTable {
 	return &deviceTable{
 		devices: map[string]*device{},
+		refused: map[string]bool{},
 		wake:    make(chan struct{}, 1),
 		now:     time.Now,
 	}
@@ -77,7 +79,10 @@ func (t *deviceTable) begin(addr, userAgent string) (string, bool) {
 
 // beginFrom records a new device in the pending state and queues it for the owner's question. It
 // returns the device's id, or false when too many devices are waiting, in total or from this
-// visitor (an IPv4 address, or an IPv6 /64). Devices that stopped waiting are forgotten first.
+// visitor (an IPv4 address, or an IPv6 /64), or when the owner has already refused a device from
+// this visitor: a refusal blocks the whole visitor for the rest of the run, so that someone with
+// the link cannot refill the waiting places with new cookies and make the owner answer again.
+// Devices that stopped waiting are forgotten first.
 func (t *deviceTable) beginFrom(addr, userAgent, country string) (string, bool) {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -90,6 +95,9 @@ func (t *deviceTable) beginFrom(addr, userAgent, country string) (string, bool) 
 		return "", false
 	}
 	group := addrGroup(host)
+	if t.refused[group] {
+		return "", false
+	}
 	fromHost := 0
 	for _, d := range t.devices {
 		if d.state == devPending && d.group == group {
@@ -168,6 +176,8 @@ func (t *deviceTable) decide(id string, allow bool) {
 	d.state = devDenied
 	if allow {
 		d.state = devApproved
+	} else {
+		t.refused[d.group] = true
 	}
 	t.pending--
 }
