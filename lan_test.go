@@ -56,6 +56,10 @@ func TestLanAddrs(t *testing.T) {
 			{"Wi-Fi", net.FlagUp, ips("192.168.1.5")},
 			{"corp", net.FlagUp | net.FlagPointToPoint, ips("10.1.1.1")},
 		}, net.ParseIP("10.1.1.1"), []string{"192.168.1.5", "10.1.1.1"}},
+		{"best is the second normal interface", []iface{
+			{"eth0", net.FlagUp, ips("192.168.50.5")},
+			{"wlan0", net.FlagUp, ips("192.168.1.5")},
+		}, net.ParseIP("192.168.1.5"), []string{"192.168.1.5", "192.168.50.5"}},
 		{"best filtered out", ifs, net.ParseIP("10.255.255.254"), []string{"10.207.68.227", "172.17.0.1"}},
 		{"no interfaces", nil, nil, []string{}},
 		{"duplicate address", []iface{
