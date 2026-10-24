@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/mdp/qrterminal/v4"
+	"golang.org/x/term"
 )
 
 // fileBasePort stands in for the shared port in file mode. The default listen port is always
@@ -64,7 +65,7 @@ func versionFromBuildInfo(current, module string) string {
 
 // usage is the help text. It is printed to stdout for --help and to stderr, after the reason,
 // when the arguments are wrong.
-const usage = "usage: yonder <port|path> [--listen N] [--open] [--upload] [--for TIME]\n       yonder --version\n"
+const usage = "usage: yonder <port|path> [--listen N] [--open] [--upload] [--for TIME] [--approve]\n       yonder --version\n"
 
 // options holds the parsed command line. Exactly one of port and path is set, unless
 // showVersion is true.
@@ -74,6 +75,7 @@ type options struct {
 	open, showVersion bool
 	upload            bool          // accept files from other devices (folders only)
 	forDur            time.Duration // stop sharing after this long; 0 means no limit
+	approve           bool          // the owner must allow each new device at the terminal
 }
 
 // main runs yonder until it receives an interrupt, terminate or hang-up signal, then exits with
@@ -93,6 +95,7 @@ func parseArgs(args []string) (options, error) {
 	fs.IntVar(&o.listenPort, "listen", 0, "")
 	fs.BoolVar(&o.open, "open", false, "")
 	fs.BoolVar(&o.upload, "upload", false, "")
+	fs.BoolVar(&o.approve, "approve", false, "")
 	fs.BoolVar(&o.showVersion, "version", false, "")
 	forText := fs.String("for", "", "")
 	if err := fs.Parse(args); err != nil {
@@ -128,6 +131,9 @@ func parseArgs(args []string) (options, error) {
 	}
 	if o.listenPort < 0 || o.listenPort > 65535 {
 		return options{}, fmt.Errorf("invalid --listen port %d", o.listenPort)
+	}
+	if o.approve && o.open {
+		return options{}, errors.New("--approve needs the access token, so it cannot be used with --open")
 	}
 	if *forText != "" {
 		d, err := parseDuration(*forText)
@@ -235,6 +241,9 @@ func chooseTarget(opts options) (shareTarget, error) {
 // serve shares what opts names and blocks until ctx is cancelled, the --for time is up, or
 // the server fails. A normal stop returns nil.
 func serve(ctx context.Context, opts options, stdin io.Reader, stdout io.Writer) error {
+	if opts.approve && !canAsk(stdin) {
+		return errors.New("--approve needs a terminal to ask you on")
+	}
 	share, err := chooseTarget(opts)
 	if err != nil {
 		return err
@@ -258,8 +267,18 @@ func serve(ctx context.Context, opts options, stdin io.Reader, stdout io.Writer)
 	suffix, warning := "", "Anyone on this network can open this URL (--open)."
 	if !opts.open {
 		token := newToken()
-		handler = withAuth(handler, token, actual)
+		var devices *deviceTable
+		if opts.approve {
+			devices = newDeviceTable()
+			promptCtx, stopPrompts := context.WithCancel(ctx)
+			defer stopPrompts()
+			go runPrompts(promptCtx, stdin, stdout, devices)
+		}
+		handler = withAuthDevices(handler, token, actual, devices)
 		suffix, warning = "/?yonder="+token, "Only people with this link or QR code can open it."
+		if opts.approve {
+			warning = "Only people with this link or QR code can open it, and you must approve each new device here."
+		}
 	}
 	printBanner(stdout, opts, share.what, addrs, actual, suffix, warning)
 
@@ -356,3 +375,11 @@ func noAddrError(best net.IP) error {
 // say writes formatted output to w. A failed write (a closed terminal, an HTTP client
 // that went away) cannot be handled usefully, so the error is dropped here, in one place.
 func say(w io.Writer, format string, args ...any) { _, _ = fmt.Fprintf(w, format, args...) }
+
+// canAsk reports whether yonder can ask the owner questions on in. Anything that is not a file
+// (a pipe, or a string in a test) can be read, but a file such as /dev/null or a redirect has
+// nobody behind it, so only a real terminal counts.
+func canAsk(in io.Reader) bool {
+	f, ok := in.(*os.File)
+	return !ok || term.IsTerminal(int(f.Fd()))
+}

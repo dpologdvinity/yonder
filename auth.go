@@ -31,17 +31,25 @@ func newToken() string {
 // withAuth lets a request through only with the share token, from the query
 // (first visit, via the QR code) or from the cookie set on that visit.
 func withAuth(h http.Handler, token string, listenPort int) http.Handler {
+	return withAuthDevices(h, token, listenPort, nil)
+}
+
+// withAuthDevices is withAuth with optional device approval. With a non-nil devices table, a
+// valid token is not enough: the first visit from a browser creates a device that the owner
+// must approve at the terminal, and the cookie then holds "<token>.<device id>". Until the
+// owner answers, the device sees a waiting page; if refused, a 403.
+func withAuthDevices(h http.Handler, token string, listenPort int, devices *deviceTable) http.Handler {
 	cookieName := fmt.Sprintf("yonder_%d", listenPort)
 	valid := func(s string) bool { return subtle.ConstantTimeCompare([]byte(s), []byte(token)) == 1 }
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		viaQuery := valid(r.URL.Query().Get(tokenParam))
-		c, err := r.Cookie(cookieName)
-		viaCookie := err == nil && valid(c.Value)
+		viaCookie, deviceID := false, ""
+		if c, err := r.Cookie(cookieName); err == nil {
+			viaCookie, deviceID = checkCookie(c.Value, valid, devices)
+		}
 		if !viaQuery && !viaCookie {
-			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-			w.WriteHeader(http.StatusForbidden)
-			say(w, "yonder: this link needs the access token. Scan the QR code from the person sharing.\n")
+			refuse(w, http.StatusForbidden, "yonder: this link needs the access token. Scan the QR code from the person sharing.\n")
 			return
 		}
 
@@ -53,10 +61,25 @@ func withAuth(h http.Handler, token string, listenPort int) http.Handler {
 			out.Header.Set("Cookie", rest)
 		}
 
+		newDevice := false
+		if devices != nil && !viaCookie { // the link proves the token; this browser is new
+			id, ok := devices.begin(r.RemoteAddr, r.UserAgent())
+			if !ok {
+				refuse(w, http.StatusTooManyRequests, "yonder: Too many devices are waiting for approval. Try again in a moment.\n")
+				return
+			}
+			deviceID, newDevice = id, true
+		}
 		if viaQuery {
 			// The token is still in this page's address bar until a redirect; keep it out of Referer.
 			w.Header().Set("Referrer-Policy", "no-referrer")
-			http.SetCookie(w, &http.Cookie{Name: cookieName, Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode})
+			if devices == nil || newDevice {
+				value := token
+				if devices != nil {
+					value = token + "." + deviceID
+				}
+				http.SetCookie(w, &http.Cookie{Name: cookieName, Value: value, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode})
+			}
 			if r.Method == http.MethodGet || r.Method == http.MethodHead {
 				// One leading slash only: "//host" would be an open redirect.
 				// Built from Path and RawQuery only: RequestURI() would also include Opaque.
@@ -68,11 +91,55 @@ func withAuth(h http.Handler, token string, listenPort int) http.Handler {
 				return
 			}
 		}
+		if devices != nil {
+			switch st, _ := devices.state(deviceID); st {
+			case devPending:
+				waitingPage(w)
+				return
+			case devDenied:
+				refuse(w, http.StatusForbidden, "yonder: The owner did not allow this device.\n")
+				return
+			}
+		}
 		if viaQuery {
 			w = noReferrerWriter{w} // a POST keeps the token in the address bar
 		}
 		h.ServeHTTP(w, out)
 	})
+}
+
+// checkCookie reports whether the yonder cookie's value grants access, and for which device.
+// Without a device table the value is the token itself. With one it is "<token>.<device id>"
+// and the id must be one this run has seen.
+func checkCookie(value string, valid func(string) bool, devices *deviceTable) (ok bool, deviceID string) {
+	if devices == nil {
+		return valid(value), ""
+	}
+	tok, id, found := strings.Cut(value, ".")
+	if !found || !valid(tok) {
+		return false, ""
+	}
+	if _, known := devices.state(id); !known {
+		return false, ""
+	}
+	return true, id
+}
+
+// refuse answers with a plain-text error page.
+func refuse(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(status)
+	say(w, "%s", message)
+}
+
+// waitingPage answers a device that the owner has not approved yet: 202 and a small page that
+// reloads itself every two seconds, so the visitor lands on the site once it is approved.
+func waitingPage(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Retry-After", "2")
+	w.WriteHeader(http.StatusAccepted)
+	say(w, "%s", `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="refresh" content="2"><title>Waiting for approval</title></head><body style="font:16px system-ui,sans-serif;margin:2rem"><h1>Waiting for approval</h1><p>The person sharing has to approve this device on their computer. This page reloads by itself.</p></body></html>`)
 }
 
 // dropParam removes every name=value pair called name, keeping the others in order.

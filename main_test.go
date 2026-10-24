@@ -6,10 +6,14 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -32,6 +36,8 @@ func TestParseArgs(t *testing.T) {
 		{[]string{"abc"}, options{path: "abc"}},
 		{[]string{"./docs", "--upload"}, options{path: "./docs", upload: true}},
 		{[]string{"3000", "--for", "30m"}, options{port: 3000, forDur: 30 * time.Minute}},
+		{[]string{"./docs", "--approve"}, options{path: "./docs", approve: true}},
+		{[]string{"--approve", "--for", "1h", "3000"}, options{port: 3000, approve: true, forDur: time.Hour}},
 		{[]string{"--for", "1d", "./docs"}, options{path: "./docs", forDur: 24 * time.Hour}},
 		{[]string{"--version"}, options{showVersion: true}},
 		{[]string{"3000", "--version"}, options{showVersion: true}},
@@ -43,7 +49,7 @@ func TestParseArgs(t *testing.T) {
 		}
 	}
 
-	bad := [][]string{{}, {""}, {"3000", "--upload"}, {"0"}, {"70000"}, {"-1"}, {"3000", "4000"}, {"3000", "--listen", "x"}, {"3000", "--listen", "70000"}, {"3000", "--nope"}, {"3000", "--for", "soon"}, {"3000", "--for", "0"}, {"3000", "--for"}}
+	bad := [][]string{{}, {""}, {"3000", "--upload"}, {"0"}, {"70000"}, {"-1"}, {"3000", "4000"}, {"3000", "--listen", "x"}, {"3000", "--listen", "70000"}, {"3000", "--nope"}, {"3000", "--approve", "--open"}, {"3000", "--for", "soon"}, {"3000", "--for", "0"}, {"3000", "--for"}}
 	for _, args := range bad {
 		if _, err := parseArgs(args); err == nil {
 			t.Errorf("parseArgs(%q): want error, got nil", args)
@@ -311,5 +317,119 @@ func TestRunStopsWhenTheTimeIsUp(t *testing.T) {
 		}
 	case <-time.After(15 * time.Second):
 		t.Fatal("yonder did not stop by itself after --for elapsed")
+	}
+}
+
+// TestRunApproveNeedsATerminal checks that --approve refuses to start when standard input is a
+// file and not a terminal, because there would be nobody to answer the questions.
+func TestRunApproveNeedsATerminal(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "stdin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	var out, errOut strings.Builder
+	code := run([]string{t.TempDir(), "--approve"}, f, &out, &errOut, context.Background())
+	if code != 1 || !strings.Contains(errOut.String(), "--approve needs a terminal to ask you on") {
+		t.Errorf("code %d, stderr %q; want exit 1 and the terminal message", code, errOut.String())
+	}
+}
+
+// TestRunApproveEndToEnd checks the real thing inside the test: with --approve, a browser that
+// opens the link waits, the owner types "y" on stdin, and the browser's next request gets the
+// shared file. A second browser that is refused never does.
+func TestRunApproveEndToEnd(t *testing.T) {
+	dir := t.TempDir()
+	must(t, os.WriteFile(filepath.Join(dir, "hello.txt"), []byte("hi"), 0o644))
+	stdinR, stdinW := io.Pipe()
+	defer func() { _ = stdinW.Close() }()
+	var out, errOut syncBuf
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan int, 1)
+	go func() {
+		done <- run([]string{dir, "--approve", "--listen", fmt.Sprint(freePort(t))}, stdinR, &out, &errOut, ctx)
+	}()
+	defer func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Error("yonder did not stop")
+		}
+	}()
+
+	deadline := time.Now().Add(10 * time.Second)
+	var link string
+	for link == "" {
+		if m := regexp.MustCompile(`http://[0-9.]+:\d+/\?yonder=\S+`).FindString(out.String()); m != "" {
+			link = m
+		}
+		select {
+		case <-done:
+			if strings.Contains(errOut.String(), "no network connection") || strings.Contains(errOut.String(), "public address") {
+				t.Skip("no private network address on this machine")
+			}
+			t.Fatalf("yonder exited early: %s", errOut.String())
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no link within 10s; stdout %q stderr %q", out.String(), errOut.String())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	base := link[:strings.Index(link, "/?")]
+
+	browser := func() *http.Client {
+		jar, _ := cookiejar.New(nil)
+		return &http.Client{Jar: jar}
+	}
+	fetch := func(c *http.Client, url string) (int, string) {
+		code, body := get(t, c, url)
+		return code, body
+	}
+	waitForPrompt := func(n int) {
+		for strings.Count(out.String(), "to open this? [y/N]") < n {
+			if time.Now().After(deadline) {
+				t.Fatalf("prompt %d never appeared; stdout %q", n, out.String())
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+
+	alice, bob := browser(), browser()
+	if code, body := fetch(alice, link); code != http.StatusAccepted || !strings.Contains(body, "Waiting for approval") {
+		t.Fatalf("alice before approval: %d %q; want the waiting page", code, body)
+	}
+	waitForPrompt(1)
+	if _, err := io.WriteString(stdinW, "y\n"); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		code, body := fetch(alice, base+"/hello.txt")
+		if code == http.StatusOK && body == "hi" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("alice never got the file; last %d %q", code, body)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	if code, _ := fetch(bob, link); code != http.StatusAccepted {
+		t.Fatalf("bob before approval: %d, want 202", code)
+	}
+	waitForPrompt(2)
+	if _, err := io.WriteString(stdinW, "n\n"); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		code, _ := fetch(bob, base+"/hello.txt")
+		if code == http.StatusForbidden {
+			break
+		}
+		if code == http.StatusOK || time.Now().After(deadline) {
+			t.Fatalf("bob after refusal: %d, want 403", code)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
