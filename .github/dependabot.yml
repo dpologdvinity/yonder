@@ -1,3 +1,5 @@
+# Dependabot opens a pull request when a pinned GitHub Action has a new release, so the
+# commit hashes in .github/workflows stay current without being edited by hand.
 version: 2
 updates:
   - package-ecosystem: github-actions

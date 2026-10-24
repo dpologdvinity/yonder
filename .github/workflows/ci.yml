@@ -1,0 +1,193 @@
+# CI for yonder. Runs on every push to the default branch and on every pull request into it.
+#
+# Stages, each of which must pass before the next one starts (fail fast):
+#   deps   - dependencies download, verify and are tidy
+#   lint   - formatting, vet, golangci-lint, vulnerability scan, and checks of every script,
+#            workflow and release config in the repository
+#   test   - the full test suite on Linux, macOS and Windows, with coverage
+#   build  - a dry run of the release: every archive and package, with the names that the
+#            installers depend on
+#
+# The release workflow (release.yml) refuses to publish a tag unless this workflow passed
+# for the same commit.
+
+name: ci
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+# A newer push to the same branch or pull request makes the older run pointless.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Read-only by default; no job here needs to write to the repository.
+permissions:
+  contents: read
+
+jobs:
+  deps:
+    name: dependencies
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod # also turns on the module and build cache
+      - name: Download and verify modules
+        run: |
+          go mod download
+          go mod verify
+      - name: go.mod and go.sum are tidy
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+  lint:
+    name: lint and static checks
+    needs: deps
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+      - name: go vet
+        run: go vet ./...
+      - name: go vet for Windows and macOS
+        run: |
+          GOOS=windows go vet ./...
+          GOOS=darwin go vet ./...
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.15.0
+      - uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
+        with:
+          go-version-file: go.mod
+          go-package: ./...
+      - name: Shell script (install.sh)
+        run: shellcheck install.sh
+      - name: GitHub Actions workflows
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      - name: npm wrapper syntax
+        run: |
+          node --check npm/install.js
+          node --check npm/bin/yonder.js
+      - name: PyPI wheel builder syntax
+        run: python3 -m py_compile pypi/build_wheels.py
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7
+        with:
+          distribution: goreleaser
+          version: v2.19.0
+          args: check
+
+  test:
+    name: test (${{ matrix.os }})
+    needs: deps
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+      # Node.js is only needed by the test that runs the upload page's script.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: "24"
+      - name: Test with the race detector (Linux and macOS)
+        if: runner.os != 'Windows'
+        run: go test -race -count=1 -covermode=atomic -coverprofile=coverage.out ./...
+      - name: Test (Windows)
+        if: runner.os == 'Windows'
+        run: go test -count=1 -covermode=atomic -coverprofile=coverage.out ./...
+      - name: Coverage report
+        shell: bash
+        run: |
+          total=$(go tool cover -func=coverage.out | awk 'END {print $3}')
+          echo "### Coverage on ${RUNNER_OS}: $total" >> "$GITHUB_STEP_SUMMARY"
+          echo "Total coverage: $total"
+      - name: Enforce the coverage floor (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          total=$(go tool cover -func=coverage.out | awk 'END {sub("%", "", $3); print $3}')
+          echo "coverage ${total}%, floor 85%"
+          awk -v t="$total" 'BEGIN { exit (t + 0 >= 85) ? 0 : 1 }'
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: runner.os == 'Linux'
+        with:
+          name: coverage
+          path: coverage.out
+          retention-days: 14
+
+  build:
+    name: build release artifacts
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0 # goreleaser reads the tags to name the snapshot
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+      - name: Build every archive and package (nothing is published)
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7
+        with:
+          distribution: goreleaser
+          version: v2.19.0
+          args: release --snapshot --clean --skip=publish
+      - name: The installers' expected file names exist
+        run: |
+          cd dist
+          missing=0
+          for f in \
+            yonder_*_linux_amd64.tar.gz yonder_*_linux_arm64.tar.gz \
+            yonder_*_darwin_amd64.tar.gz yonder_*_darwin_arm64.tar.gz \
+            yonder_*_windows_amd64.zip yonder_*_windows_arm64.zip \
+            yonder_*_amd64.deb yonder_*_arm64.deb \
+            yonder-*.x86_64.rpm yonder-*.aarch64.rpm \
+            yonder-*-x86_64.pkg.tar.zst yonder-*-aarch64.pkg.tar.zst \
+            checksums.txt; do
+            if ! compgen -G "$f" >/dev/null; then
+              echo "missing: $f"
+              missing=1
+            fi
+          done
+          exit $missing
+      - name: The Linux binary runs
+        run: |
+          bin=$(ls dist/yonder_linux_amd64*/yonder)
+          "$bin" --version
+      - name: The npm package packs
+        run: npm pack --dry-run
+        working-directory: npm
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-artifacts
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.deb
+            dist/*.rpm
+            dist/*.pkg.tar.zst
+            dist/checksums.txt
+          retention-days: 7
