@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -194,15 +195,24 @@ func TestEndToEndUpload(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
+	if resp.StatusCode != 200 { // the 303 back to the listing was followed
+		t.Errorf("upload response = %d, want 200 after the redirect", resp.StatusCode)
+	}
 	if b, err := os.ReadFile(filepath.Join(dir, "phone.txt")); err != nil || string(b) != "from phone" {
 		t.Errorf("uploaded file = %q, %v", b, err)
 	}
 }
 
-func TestEndToEndInterruptDuringUploadLeavesNoTempFiles(t *testing.T) {
+func TestEndToEndSignalDuringUploadLeavesNoTempFiles(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("no os.Interrupt delivery to child processes")
+		t.Skip("no signal delivery to child processes")
 	}
+	for _, sig := range []os.Signal{os.Interrupt, syscall.SIGTERM, syscall.SIGHUP} {
+		t.Run(sig.String(), func(t *testing.T) { signalDuringUpload(t, sig) })
+	}
+}
+
+func signalDuringUpload(t *testing.T, sig os.Signal) {
 	dir := t.TempDir()
 	url, cmd, exited := startYonderOn(t, dir, `http://[0-9.]+:%d/\?yonder=[A-Za-z0-9_-]{22}`, "--upload")
 	jar, _ := cookiejar.New(nil)
@@ -231,9 +241,12 @@ func TestEndToEndInterruptDuringUploadLeavesNoTempFiles(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	cmd.Process.Signal(os.Interrupt)
+	cmd.Process.Signal(sig)
 	select {
-	case <-exited:
+	case err := <-exited:
+		if err != nil {
+			t.Errorf("exit after %v: %v, want a clean exit (code 0)", sig, err)
+		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("yonder did not exit")
 	}

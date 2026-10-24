@@ -1,9 +1,11 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
+	"syscall"
 )
 
 // listen opens the proxy listener on all interfaces.
@@ -26,4 +28,10 @@ func listen(target, explicit int) (net.Listener, error) {
 		}
 	}
 	return net.Listen("tcp", "0.0.0.0:0")
+}
+
+// isAddrInUse reports whether err means the port is already taken: EADDRINUSE on
+// Unix, or WSAEADDRINUSE (10048), which Windows reports with a different value.
+func isAddrInUse(err error) bool {
+	return errors.Is(err, syscall.EADDRINUSE) || errors.Is(err, syscall.Errno(10048))
 }

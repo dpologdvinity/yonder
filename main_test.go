@@ -114,7 +114,7 @@ func TestFileHandlerSymlinkArg(t *testing.T) {
 func TestFileHandlerRejectsDotfile(t *testing.T) {
 	p := filepath.Join(t.TempDir(), ".bashrc")
 	os.WriteFile(p, []byte("x"), 0o644)
-	if _, _, _, err := fileHandler(p, false); err == nil || err.Error() != "hidden files are never shared: "+p {
+	if _, _, _, err := fileHandler(p, false); err == nil || err.Error() != "this file name cannot be shared: "+p {
 		t.Errorf("err = %v, want hidden-file error", err)
 	}
 }
@@ -134,5 +134,27 @@ func TestRunUsageErrorsSayWhy(t *testing.T) {
 	}
 	if !strings.Contains(errOut.String(), "yonder: --upload needs a folder") {
 		t.Errorf("stderr = %q, want the reason", errOut.String())
+	}
+}
+
+func TestFileHandlerRefusesUnservableName(t *testing.T) {
+	p := filepath.Join(t.TempDir(), `a\b.txt`)
+	if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+		t.Skip("file system refuses backslash names")
+	}
+	_, _, _, err := fileHandler(p, false)
+	if err == nil || !strings.Contains(err.Error(), "this file name cannot be shared") {
+		t.Errorf("err = %v, want the file-name error", err)
+	}
+}
+
+func TestNoAddrError(t *testing.T) {
+	if err := noAddrError(net.ParseIP("131.215.1.20")); !strings.Contains(err.Error(), "public address (131.215.1.20)") || !strings.Contains(err.Error(), "private") {
+		t.Errorf("public best: %v", err)
+	}
+	for _, best := range []net.IP{nil, net.ParseIP("192.168.1.5")} {
+		if err := noAddrError(best); err.Error() != "no network connection found" {
+			t.Errorf("best %v: %v", best, err)
+		}
 	}
 }

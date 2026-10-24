@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -21,6 +22,10 @@ import (
 )
 
 // version is set by goreleaser; `go install` builds fall back to the module version.
+// fileBasePort stands in for the shared port in file mode, so the default listen
+// port is fileBasePort + 10000 = 18000.
+const fileBasePort = 8000
+
 var version = "dev"
 
 func init() {
@@ -39,7 +44,7 @@ type options struct {
 }
 
 func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	code := run(os.Args[1:], os.Stdout, os.Stderr, ctx)
 	stop()
 	os.Exit(code)
@@ -119,7 +124,7 @@ func run(args []string, stdout, stderr io.Writer, ctx context.Context) int {
 			return fail(err)
 		}
 		defer closeRoot()
-		handler, what, port = h, abs, 8000 // default listen port 8000+10000
+		handler, what, port = h, abs, fileBasePort
 	} else {
 		target, err := findTarget(port)
 		if err != nil {
@@ -132,7 +137,7 @@ func run(args []string, stdout, stderr io.Writer, ctx context.Context) int {
 		return fail(err)
 	}
 	if len(addrs) == 0 {
-		return fail(errors.New("no network connection found"))
+		return fail(noAddrError(defaultRouteIP()))
 	}
 	ln, err := listen(port, opts.listenPort)
 	if err != nil {
@@ -193,8 +198,10 @@ func fileHandler(p string, upload bool) (h http.Handler, abs string, closeRoot f
 	if err != nil {
 		return nil, "", nil, fmt.Errorf("no such file or folder: %s", p)
 	}
-	if !info.IsDir() && strings.HasPrefix(info.Name(), ".") {
-		return nil, "", nil, fmt.Errorf("hidden files are never shared: %s", p)
+	// The server applies visibleName to every request, so a file it would refuse
+	// must be refused here too, not shared as a link that always gives 404.
+	if !info.IsDir() && !visibleName(info.Name(), runtime.GOOS == "windows") {
+		return nil, "", nil, fmt.Errorf("this file name cannot be shared: %s", p)
 	}
 	if upload && !info.IsDir() {
 		return nil, "", nil, errors.New("--upload needs a folder")
@@ -208,4 +215,13 @@ func fileHandler(p string, upload bool) (h http.Handler, abs string, closeRoot f
 		return nil, "", nil, err
 	}
 	return newFileServer(root, only, upload), abs, root.Close, nil
+}
+
+// noAddrError explains why no shareable address was found. best is the address of
+// the default route, or nil when the machine has none.
+func noAddrError(best net.IP) error {
+	if best != nil && !best.IsPrivate() && !best.IsLoopback() {
+		return fmt.Errorf("this network gives your computer a public address (%s); yonder only shares on private networks", best)
+	}
+	return errors.New("no network connection found")
 }
