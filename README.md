@@ -107,6 +107,7 @@ yonder <folder> --upload    also let other devices send files into the folder
 yonder <target> --open      share without the secret token (trusted networks only)
 yonder <target> --for 30m   stop sharing after 30 minutes (also 2h, 1d; at most 7d)
 yonder <target> --approve   allow each new device yourself, at the terminal
+yonder <target> --public    share over the internet (needs cloudflared)
 yonder <target> --listen N  use N as the public port
 yonder --version            print the version
 ```
@@ -116,6 +117,8 @@ yonder --version            print the version
 | `--listen N` | Uses port `N` for other devices. By default yonder uses the shared port plus 10000 (`3000` becomes `13000`), or 18000 when sharing files, so the link keeps the same port across restarts. If that port is busy, yonder picks a free one. With `--listen`, a busy port is an error. |
 | `--for TIME` | Stops sharing after `TIME`, such as `90s`, `30m`, `2h` or `1d` (more than zero, at most `7d`). yonder prints when the link stops working, and at that time it says so and exits. The end time is checked against the clock on the wall, so a laptop that sleeps does not extend the link. Works with every other option. |
 | `--approve` | Asks you at the terminal before each new device is let in. See [Approve each device](#approve-each-device). Needs the token, so it cannot be combined with `--open`. |
+| `--public` | Also shares over the internet through a Cloudflare quick tunnel. See [Share over the internet](#share-over-the-internet). Sets `--for 1h` and `--approve` unless you choose otherwise. Cannot be combined with `--open`. |
+| `--no-approve` | With `--public`: let anyone with the link in without asking you. |
 | `--open` | Turns the secret token off. Anyone on the network can open the link. |
 | `--upload` | Lets other devices send files into a shared folder. Folders only. |
 | `--version`, `--help` | Print the version, or the usage text. |
@@ -162,6 +165,29 @@ The link, QR code and token work the same as when sharing a port.
 - Add `--upload` to let the other device send files into the folder: the page gets an Upload button (on a phone it opens the photo picker or Files). Existing files are never overwritten (`photo (1).jpg`), folder parts of a name are dropped (`../../x.txt` is saved as `x.txt`), hidden names are refused, and one upload is capped at 4 GB. Uploads are off unless you pass the flag. With uploads on, shared pages cannot run script (see [Is it safe?](#is-it-safe)).
 - A folder named like a number is a port to yonder: use `yonder ./3000`.
 
+## Share over the internet
+
+`--public` shows a second link that works from anywhere, for example a client on mobile data. yonder starts [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) and uses a free Cloudflare "quick tunnel", which needs no account. Install `cloudflared` first (`brew install cloudflared`, or see the link); yonder never downloads it for you.
+
+```
+$ yonder 3000 --public
+  Public link:     https://example-words.trycloudflare.com/?yonder=...
+  On your network: http://192.168.1.20:13000/?yonder=...
+```
+
+Because anyone on the internet who gets the link can try it, `--public` is stricter by default:
+
+- The link stops after one hour (`--for` changes this, up to `7d`).
+- `--approve` is on: you see the visitor's address and country and answer `y` or `n`. `--no-approve` turns it off.
+- `--open` is refused.
+- Cookies are marked `Secure`, and the tunnel is the only way in: the tunnel points at a separate port that only your computer can reach.
+
+Know the limits:
+
+- **Cloudflare carries your traffic and can read it.** Do not share secrets this way.
+- Quick tunnels are for testing: no uptime promise, at most 200 requests at once (more get a `429`), no server-sent events, and the address changes on every run. Large request bodies (uploads of about 100 MB or more) may be refused by Cloudflare.
+- Link previews (iMessage, Slack, Discord) fetch the link and appear as a device to approve.
+
 ## How it works
 
 yonder is one program with no dependencies on the other device. It opens a server on all of your network interfaces and puts two things in front of what you share: the access gate and a request log.
@@ -186,6 +212,7 @@ The link and QR code carry a secret token. Anyone without it gets a 403 and neve
 - With `--upload`, files that are served carry a sandbox policy, so a web page someone uploaded cannot run script on your computer's address. This also means an HTML site shared from an upload-enabled folder will not run its scripts.
 - Stop sharing with Ctrl-C, or share for a limited time with `--for`.
 - `--approve` makes a leaked link useless on its own: nobody gets in until you say so.
+- `--public` sends traffic through Cloudflare, which can read it. See [Share over the internet](#share-over-the-internet).
 
 To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
@@ -195,7 +222,7 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
 - Response bodies are not rewritten. Absolute `http://localhost:<port>` links inside HTML or JS stay broken.
 - `http://localhost` counts as a secure context; `http://192.168.x.x` does not. Service workers, camera, geolocation, clipboard and `crypto.subtle` do not work on the other device yet.
 - Guest, campus and café networks sometimes block device-to-device traffic. If the other device cannot connect, try a phone hotspot.
-- yonder only shares on private networks (`10.x`, `172.16-31.x`, `192.168.x`). Some networks give every computer a public address; there yonder stops with a message instead of putting your site on the internet.
+- The link on your network only works on private networks (`10.x`, `172.16-31.x`, `192.168.x`). Some networks give every computer a public address; there yonder stops with a message instead of putting your site on the internet. Only `--public` shares beyond your network, and only through its tunnel.
 - Cookies do not include the port, so another web service on the same IP address receives yonder's cookie.
 
 ## Firewalls

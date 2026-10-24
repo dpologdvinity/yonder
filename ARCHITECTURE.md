@@ -50,6 +50,8 @@ All code is in one Go package, `main`, at the repository root. One file has one 
 | `port.go` | `listen`: opens the public socket and picks its port (shared port plus 10000, with fallbacks). |
 | `auth.go` | The access gate `withAuth` and `withAuthDevices`, token creation, and the helpers that remove the token and cookie before a request moves on. |
 | `approve.go` | Device approval for `--approve`: the table of devices, the questions asked at the terminal, and the description of a browser shown to the owner. |
+| `tunnel.go` | `--public`: finds `cloudflared`, starts it, and waits until the tunnel is registered. |
+| `edge.go` | Which headers to believe: the tunnel port trusts Cloudflare's visitor address and country; every other port strips them. |
 | `proxy.go` | The reverse proxy `newProxy`, the request log `withLog`, and the "device connected" notice. |
 | `files.go` | The file server `newFileServer`: listing page, downloads, and the rules about what may be served. |
 | `upload.go` | Receiving uploads: streaming to a hidden temporary file and moving it into place safely. |
@@ -180,6 +182,12 @@ With `--approve`, the cookie value is `<token>.<device id>` instead of the token
 - Waiting-page requests are kept out of the request log (`markQuiet`), so they do not scroll the owner's question away. The question shows the visitor's address without its port, which changes on every connection.
 - Answers are read one byte at a time, never ahead, and the terminal's unread input is discarded before each question (`flushInput`), so text typed early cannot answer a question that has not been shown. `inForeground` makes `--approve` refuse to start in a background job, which the shell would freeze.
 
+### Internet sharing (`tunnel.go`, `edge.go`)
+
+With `--public`, yonder starts `cloudflared tunnel --url http://127.0.0.1:<random port>` as a child process. That port is a second listener, separate from the network one, and has the same access gate and device table behind it. `startTunnel` reads cloudflared's output for the `https://...trycloudflare.com` address and then also waits for `Registered tunnel connection`, because cloudflared prints the address before it works and a visitor who tried earlier would get a failed lookup.
+
+Only the tunnel listener (`withTunnelEdge`) believes `CF-Connecting-IP` and `CF-IPCountry`; it takes them, removes every `CF-*`, `X-Forwarded-*`, `Forwarded`, `X-Real-IP` and `True-Client-IP` header, and marks the request as secure. The network listener (`withLANEdge`) removes those headers without believing them, so a device on the network cannot pretend to be someone else. Visitors from one IPv6 /64 count as one address in the per-address limit. If cloudflared stops, yonder stops.
+
 ### Network address (`lan.go`, `port.go`, `target.go`, `wsl.go`)
 
 - `lanAddrs` keeps only private IPv4 addresses on interfaces that are up and not loopback, removes duplicates, and ranks them: the address of the default route first (unless its interface is virtual), then ordinary interfaces, then Docker, VM, VPN and point-to-point interfaces. Interface names are matched case-insensitively and include Windows names such as "vEthernet" and "OpenVPN TAP-Windows6".
@@ -198,6 +206,7 @@ yonder exposes part of your computer to a network. The design assumes that **oth
 | A device that has the link, when you used `--approve` | Get in before you allow it | A new device waits on a page until you answer at the terminal; the app never sees its requests. A refusal is final until restart. |
 | A device that has the link | Read anything outside what you shared | The proxy forwards only to the one port. The file server uses `os.Root`, refuses links, special files and hidden names. |
 | Someone who sees the link in a screenshot or terminal log | Learn the token from the log | The log redacts it. The address bar and `Referer` lose it after the first redirect. |
+| A device on the network, with `--public` | Pretend to be another visitor by sending `CF-Connecting-IP` or `X-Forwarded-For` | The network listener strips every proxy header before anything reads it; only the loopback tunnel listener believes Cloudflare's headers. |
 | A website open in a browser on the network | Make the browser post into your folder or your app | Uploads check `Origin` and `Sec-Fetch-Site`. The cookie is `SameSite=Lax`. Redirects stay on the same site. |
 | A file someone uploaded | Run script on yonder's address, or hide its real type | Served files get `nosniff` and a sandbox policy; names with control or bidi characters are refused. |
 | A file name | Escape the folder or overwrite a file | Only the base name is used; `O_EXCL` plus rename never replaces a file; `os.Root` blocks escapes. |
@@ -231,7 +240,9 @@ Each control above has a test. [SECURITY.md](SECURITY.md) explains how to report
 
 **Hidden files are decided by one function.** `safeRel` and `visibleName` are used by the file server, the listing, and the start-up check of a single file. A name the server would refuse is never listed and never shared as a link that always gives `404`.
 
-**Only private addresses.** Putting a development site on a public address by accident is worse than an error message, so yonder refuses.
+**Only private addresses on the network port.** Putting a development site on a public address by accident is worse than an error message, so yonder refuses. `--public` does not change this: it adds a tunnel, which is a deliberate, visible choice with a time limit and approval on by default, and leaves the network port private.
+
+**Cloudflare quick tunnel through an external `cloudflared`.** It needs no account or domain and yonder keeps no credentials. yonder never downloads cloudflared, so the user decides to trust it. The cost: Cloudflare reads the traffic, and the tunnel has no uptime promise.
 
 **Standard library first.** One dependency (the QR drawer) keeps the supply chain small and the binary static.
 
