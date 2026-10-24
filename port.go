@@ -1,3 +1,6 @@
+// port.go opens the listening socket that other devices connect to, and chooses its port
+// number.
+
 package main
 
 import (

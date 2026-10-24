@@ -1,3 +1,6 @@
+// wsl.go detects Windows Subsystem for Linux in its default NAT mode, where other devices
+// cannot reach the machine, and explains how to fix it.
+
 package main
 
 import (
@@ -6,6 +9,7 @@ import (
 	"strings"
 )
 
+// natHint is the message printed when WSL runs in NAT mode and other devices cannot connect.
 const natHint = "WSL is in NAT mode, so other devices cannot reach it.\n" +
 	"Fix: set networkingMode=mirrored under [wsl2] in %UserProfile%\\.wslconfig, then run `wsl --shutdown`.\n" +
 	"Or run the Windows build, yonder.exe.\n"

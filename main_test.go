@@ -1,3 +1,6 @@
+// main_test.go tests the command line: argument parsing, usage and error messages, exit codes,
+// and how a path becomes something to share.
+
 package main
 
 import (
@@ -11,6 +14,8 @@ import (
 	"testing"
 )
 
+// TestParseArgs checks that valid arguments, in any order, give the right options and that
+// invalid ones give an error.
 func TestParseArgs(t *testing.T) {
 	ok := []struct {
 		args []string
@@ -43,6 +48,8 @@ func TestParseArgs(t *testing.T) {
 	}
 }
 
+// TestRunUsage checks that a bad port prints the reason and the usage text and exits with code
+// 1.
 func TestRunUsage(t *testing.T) {
 	var out, errOut strings.Builder
 	if code := run([]string{"70000"}, &out, &errOut, context.Background()); code != 1 {
@@ -53,6 +60,8 @@ func TestRunUsage(t *testing.T) {
 	}
 }
 
+// TestRunNothingListening checks that pointing yonder at a port nobody listens on exits with
+// code 1 and says so.
 func TestRunNothingListening(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -70,6 +79,8 @@ func TestRunNothingListening(t *testing.T) {
 	}
 }
 
+// TestRunHelpExitsZero checks that -h and --help print the usage text to stdout and exit with
+// code 0.
 func TestRunHelpExitsZero(t *testing.T) {
 	for _, flagName := range []string{"-h", "--help"} {
 		var out, errOut strings.Builder
@@ -82,6 +93,8 @@ func TestRunHelpExitsZero(t *testing.T) {
 	}
 }
 
+// TestRunMissingPath checks that a path that does not exist exits with code 1 and names the
+// path.
 func TestRunMissingPath(t *testing.T) {
 	var out, errOut strings.Builder
 	if code := run([]string{"/nonexistent/x"}, &out, &errOut, context.Background()); code != 1 {
@@ -92,6 +105,8 @@ func TestRunMissingPath(t *testing.T) {
 	}
 }
 
+// TestFileHandlerSymlinkArg checks that a symbolic link given as the thing to share is followed
+// to its target.
 func TestFileHandlerSymlinkArg(t *testing.T) {
 	real := filepath.Join(t.TempDir(), "doc.txt")
 	must(t, os.WriteFile(real, []byte("doc"), 0o644))
@@ -111,6 +126,8 @@ func TestFileHandlerSymlinkArg(t *testing.T) {
 	}
 }
 
+// TestFileHandlerRejectsDotfile checks that a file whose name starts with a dot cannot be
+// shared.
 func TestFileHandlerRejectsDotfile(t *testing.T) {
 	p := filepath.Join(t.TempDir(), ".bashrc")
 	must(t, os.WriteFile(p, []byte("x"), 0o644))
@@ -119,6 +136,7 @@ func TestFileHandlerRejectsDotfile(t *testing.T) {
 	}
 }
 
+// TestFileHandlerUploadNeedsFolder checks that --upload with a single file is refused.
 func TestFileHandlerUploadNeedsFolder(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "a.txt")
 	must(t, os.WriteFile(p, []byte("x"), 0o644))
@@ -127,6 +145,8 @@ func TestFileHandlerUploadNeedsFolder(t *testing.T) {
 	}
 }
 
+// TestRunUsageErrorsSayWhy checks that --upload together with a port prints the reason as well
+// as the usage text.
 func TestRunUsageErrorsSayWhy(t *testing.T) {
 	var out, errOut strings.Builder
 	if code := run([]string{"3000", "--upload"}, &out, &errOut, context.Background()); code != 1 {
@@ -137,6 +157,9 @@ func TestRunUsageErrorsSayWhy(t *testing.T) {
 	}
 }
 
+// TestFileHandlerRefusesUnservableName checks that a file name the server would always refuse
+// (one with a backslash) is rejected at startup, instead of producing a link that only ever
+// gives 404.
 func TestFileHandlerRefusesUnservableName(t *testing.T) {
 	p := filepath.Join(t.TempDir(), `a\b.txt`)
 	if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
@@ -148,6 +171,8 @@ func TestFileHandlerRefusesUnservableName(t *testing.T) {
 	}
 }
 
+// TestNoAddrError checks that a public address gets its own explanation and that anything else
+// gets the general "no network connection" message.
 func TestNoAddrError(t *testing.T) {
 	if err := noAddrError(net.ParseIP("131.215.1.20")); !strings.Contains(err.Error(), "public address (131.215.1.20)") || !strings.Contains(err.Error(), "private") {
 		t.Errorf("public best: %v", err)

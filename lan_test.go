@@ -1,3 +1,5 @@
+// lan_test.go tests choosing the address that goes into the QR code.
+
 package main
 
 import (
@@ -6,6 +8,7 @@ import (
 	"testing"
 )
 
+// ips parses addresses written as text, so test tables stay readable.
 func ips(ss ...string) []net.IP {
 	out := make([]net.IP, len(ss))
 	for i, s := range ss {
@@ -14,6 +17,7 @@ func ips(ss ...string) []net.IP {
 	return out
 }
 
+// ipStrings turns addresses back into text, for comparing and for failure messages.
 func ipStrings(in []net.IP) []string {
 	out := make([]string, len(in))
 	for i, ip := range in {
@@ -22,6 +26,9 @@ func ipStrings(in []net.IP) []string {
 	return out
 }
 
+// TestLanAddrs checks which addresses are offered and in what order, on machines shaped like
+// real ones: WSL with a private address on loopback, Docker, VPNs, VM networks, and Windows
+// interface names.
 func TestLanAddrs(t *testing.T) {
 	// Modelled on WSL mirrored mode: a private address on lo, plus docker0.
 	ifs := []iface{

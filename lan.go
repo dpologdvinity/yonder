@@ -1,3 +1,7 @@
+// lan.go finds the address other devices should use to reach this computer. It prefers the main
+// network and keeps container, VM and VPN addresses out of the first position, because a phone
+// cannot reach those.
+
 package main
 
 import (
@@ -5,6 +9,8 @@ import (
 	"strings"
 )
 
+// iface is the part of a network interface that address selection needs. It exists so tests can
+// describe a machine without touching the real network.
 type iface struct {
 	Name  string
 	Flags net.Flags

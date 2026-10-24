@@ -1,3 +1,6 @@
+// e2e_test.go runs the compiled yonder binary against real servers, the way a person uses it:
+// output, links, cookies, uploads and shutdown.
+
 package main
 
 import (
@@ -23,9 +26,12 @@ import (
 )
 
 var (
+	// buildOnce makes sure the binary is built only once per test run.
 	buildOnce sync.Once
-	binPath   string
-	buildErr  error
+	// binPath is where the built binary lives.
+	binPath string
+	// buildErr holds the build failure, if there was one, so every test reports it.
+	buildErr error
 )
 
 // buildBinary builds yonder once per test run.
@@ -115,6 +121,7 @@ func startYonderOn(t *testing.T, target, urlPattern string, extra ...string) (st
 	return "", nil, nil
 }
 
+// get fetches url with client and returns the status code and the body.
 func get(t *testing.T, client *http.Client, url string) (int, string) {
 	t.Helper()
 	resp, err := client.Get(url)
@@ -126,6 +133,8 @@ func get(t *testing.T, client *http.Client, url string) (int, string) {
 	return resp.StatusCode, string(body)
 }
 
+// TestEndToEnd shares a local server and checks the whole journey: the link works, the same
+// address without the token gets 403, and Ctrl-C ends the program with exit code 0.
 func TestEndToEnd(t *testing.T) {
 	url, cmd, exited := startYonder(t, `http://[0-9.]+:%d/\?yonder=[A-Za-z0-9_-]{22}`)
 
@@ -152,6 +161,7 @@ func TestEndToEnd(t *testing.T) {
 	}
 }
 
+// TestEndToEndOpen checks that with --open the link has no token and anyone can fetch the page.
 func TestEndToEndOpen(t *testing.T) {
 	url, _, _ := startYonder(t, `http://[0-9.]+:%d\b`, "--open")
 	if strings.Contains(url, "yonder=") {
@@ -162,6 +172,8 @@ func TestEndToEndOpen(t *testing.T) {
 	}
 }
 
+// TestEndToEndFolder checks sharing a folder: the listing and a file download both work through
+// the link.
 func TestEndToEndFolder(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "hello.txt"), []byte("hi"), 0o644); err != nil {
@@ -178,6 +190,8 @@ func TestEndToEndFolder(t *testing.T) {
 	}
 }
 
+// TestEndToEndUpload checks that with --upload a file posted through the link lands in the
+// shared folder.
 func TestEndToEndUpload(t *testing.T) {
 	dir := t.TempDir()
 	url, _, _ := startYonderOn(t, dir, `http://[0-9.]+:%d/\?yonder=[A-Za-z0-9_-]{22}`, "--upload")
@@ -203,6 +217,9 @@ func TestEndToEndUpload(t *testing.T) {
 	}
 }
 
+// TestEndToEndSignalDuringUploadLeavesNoTempFiles checks that interrupt, terminate and hang-up
+// signals during an unfinished upload make yonder exit cleanly and leave no temporary file
+// behind.
 func TestEndToEndSignalDuringUploadLeavesNoTempFiles(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("no signal delivery to child processes")
@@ -212,6 +229,8 @@ func TestEndToEndSignalDuringUploadLeavesNoTempFiles(t *testing.T) {
 	}
 }
 
+// signalDuringUpload starts an upload that stalls, sends sig to yonder, and checks for a clean
+// exit and an empty shared folder.
 func signalDuringUpload(t *testing.T, sig os.Signal) {
 	dir := t.TempDir()
 	url, cmd, exited := startYonderOn(t, dir, `http://[0-9.]+:%d/\?yonder=[A-Za-z0-9_-]{22}`, "--upload")

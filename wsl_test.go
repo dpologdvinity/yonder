@@ -1,11 +1,16 @@
+// wsl_test.go tests the hint shown when Windows Subsystem for Linux runs in NAT mode.
+
 package main
 
 import "testing"
 
+// wantNATHint is the exact text expected from the hint.
 const wantNATHint = "WSL is in NAT mode, so other devices cannot reach it.\n" +
 	"Fix: set networkingMode=mirrored under [wsl2] in %UserProfile%\\.wslconfig, then run `wsl --shutdown`.\n" +
 	"Or run the Windows build, yonder.exe.\n"
 
+// TestWSLHint checks that the hint appears only on WSL in NAT mode, not in mirrored mode or on
+// ordinary Linux.
 func TestWSLHint(t *testing.T) {
 	tests := []struct {
 		name, osrelease, mode string

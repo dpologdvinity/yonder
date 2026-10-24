@@ -1,3 +1,6 @@
+// upload_test.go tests receiving uploads in upload.go: where files land, what is refused, and
+// what is left behind (nothing) when an upload fails or is cut short.
+
 package main
 
 import (
@@ -13,8 +16,11 @@ import (
 	"time"
 )
 
+// part is one file in an upload request: its claimed name and its content.
 type part struct{ name, body string }
 
+// postFiles posts the parts to target as a browser form upload and returns the recorded
+// response.
 func postFiles(h http.Handler, target string, parts ...part) *httptest.ResponseRecorder {
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
@@ -44,6 +50,7 @@ func uploadDir(t *testing.T) (string, *os.Root) {
 	return dir, root
 }
 
+// readFile returns the content of the file at p and fails the test if it cannot be read.
 func readFile(t *testing.T, p string) string {
 	t.Helper()
 	b, err := os.ReadFile(p)
@@ -53,6 +60,8 @@ func readFile(t *testing.T, p string) string {
 	return string(b)
 }
 
+// TestUploadSaves checks that uploaded files are saved in the folder and that the browser is
+// sent back to the listing.
 func TestUploadSaves(t *testing.T) {
 	dir, root := uploadDir(t)
 	h := newFileServer(root, "", true)
@@ -65,6 +74,7 @@ func TestUploadSaves(t *testing.T) {
 	}
 }
 
+// TestUploadSubfolder checks that an upload from a subfolder's page lands in that subfolder.
 func TestUploadSubfolder(t *testing.T) {
 	dir, root := uploadDir(t)
 	rec := postFiles(newFileServer(root, "", true), "/sub/", part{"c.txt", "c"})
@@ -76,6 +86,8 @@ func TestUploadSubfolder(t *testing.T) {
 	}
 }
 
+// TestUploadNoOverwrite checks that a file with an existing name is saved as "name (1)" and
+// that the original stays untouched.
 func TestUploadNoOverwrite(t *testing.T) {
 	dir, root := uploadDir(t)
 	h := newFileServer(root, "", true)
@@ -89,6 +101,8 @@ func TestUploadNoOverwrite(t *testing.T) {
 	}
 }
 
+// TestUploadPathNameUsesBase checks that only the last part of a name is used, so a path cannot
+// move a file elsewhere.
 func TestUploadPathNameUsesBase(t *testing.T) {
 	dir, root := uploadDir(t)
 	postFiles(newFileServer(root, "", true), "/", part{"../../evil.txt", "e"}, part{`C:\Users\x\photo.jpg`, "p"})
@@ -100,6 +114,8 @@ func TestUploadPathNameUsesBase(t *testing.T) {
 	}
 }
 
+// TestUploadRejectsBadNames checks that hidden names and dot-dot names are refused with 400 and
+// nothing is written.
 func TestUploadRejectsBadNames(t *testing.T) {
 	for _, name := range []string{".env", "..", "a/../.hidden"} {
 		dir, root := uploadDir(t)
@@ -114,6 +130,8 @@ func TestUploadRejectsBadNames(t *testing.T) {
 	}
 }
 
+// TestUploadEmptySelectionIgnored checks that pressing Upload with no file chosen changes
+// nothing and returns to the listing.
 func TestUploadEmptySelectionIgnored(t *testing.T) {
 	dir, root := uploadDir(t)
 	if rec := postFiles(newFileServer(root, "", true), "/", part{"", ""}); rec.Code != http.StatusSeeOther {
@@ -124,6 +142,8 @@ func TestUploadEmptySelectionIgnored(t *testing.T) {
 	}
 }
 
+// TestUploadDisabled checks that with uploads off POST gives 405, nothing is written, and the
+// page has no upload form.
 func TestUploadDisabled(t *testing.T) {
 	dir, root := uploadDir(t)
 	h := newFileServer(root, "", false)
@@ -141,6 +161,8 @@ func TestUploadDisabled(t *testing.T) {
 	}
 }
 
+// TestUploadTooLarge checks that an upload over the size limit gets 413 and leaves no partial
+// file.
 func TestUploadTooLarge(t *testing.T) {
 	old := maxUpload
 	maxUpload = 300
@@ -155,6 +177,7 @@ func TestUploadTooLarge(t *testing.T) {
 	}
 }
 
+// TestUploadHiddenFolderRefused checks that uploading into a hidden folder gives 404.
 func TestUploadHiddenFolderRefused(t *testing.T) {
 	dir, root := uploadDir(t)
 	must(t, os.Mkdir(filepath.Join(dir, ".git"), 0o755))
@@ -163,6 +186,8 @@ func TestUploadHiddenFolderRefused(t *testing.T) {
 	}
 }
 
+// TestUploadCrossOriginRefused checks that a form posted by another website's page is refused
+// with 403 and writes nothing.
 func TestUploadCrossOriginRefused(t *testing.T) {
 	for _, hdr := range []http.Header{
 		{"Origin": {"http://evil.example"}},
@@ -190,6 +215,7 @@ func TestUploadCrossOriginRefused(t *testing.T) {
 	}
 }
 
+// TestUploadLeavesNoPartFiles checks that after a successful upload no temporary file remains.
 func TestUploadLeavesNoPartFiles(t *testing.T) {
 	dir, root := uploadDir(t)
 	postFiles(newFileServer(root, "", true), "/", part{"ok.txt", "fine"})
@@ -204,6 +230,8 @@ func TestUploadLeavesNoPartFiles(t *testing.T) {
 	}
 }
 
+// TestUploadInProgressHidden checks that while an upload is still streaming, its file does not
+// appear under the final name.
 func TestUploadInProgressHidden(t *testing.T) {
 	dir, root := uploadDir(t)
 	pr, pw := io.Pipe()
@@ -241,6 +269,8 @@ func TestUploadInProgressHidden(t *testing.T) {
 	}
 }
 
+// TestUploadBadNamesAre400 checks that a name the file system refuses (too long) gives 400 and
+// leaves nothing behind.
 func TestUploadBadNamesAre400(t *testing.T) {
 	long := strings.Repeat("a", 300) + ".txt"
 	dir, root := uploadDir(t)
@@ -253,6 +283,9 @@ func TestUploadBadNamesAre400(t *testing.T) {
 	}
 }
 
+// TestUploadNameRejectsInvisibleText checks that names with control or text-direction
+// characters, which can disguise a file's real type, are refused, while ordinary Unicode names
+// are fine.
 func TestUploadNameRejectsInvisibleText(t *testing.T) {
 	for _, name := range []string{"cod\u202egpj.exe", "a\nb.txt", "x\u200f.txt", "t\u2066.txt"} {
 		if _, ok := uploadName(name, false); ok {
@@ -264,6 +297,8 @@ func TestUploadNameRejectsInvisibleText(t *testing.T) {
 	}
 }
 
+// TestUploadWrongTargetMessage checks that posting to a file instead of a folder gets 405 with
+// a message saying that uploads go to a folder.
 func TestUploadWrongTargetMessage(t *testing.T) {
 	_, root := uploadDir(t)
 	rec := postFiles(newFileServer(root, "", true), "/index.txt", part{"x.txt", "x"})
@@ -272,6 +307,8 @@ func TestUploadWrongTargetMessage(t *testing.T) {
 	}
 }
 
+// TestListingShowsUploadLimit checks that the listing page tells the browser the size limit, so
+// it can warn before a large upload.
 func TestListingShowsUploadLimit(t *testing.T) {
 	_, root := uploadDir(t)
 	body := getFile(newFileServer(root, "", true), "/", nil).Body.String()

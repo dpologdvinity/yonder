@@ -1,3 +1,6 @@
+// auth_test.go tests the access gate in auth.go: who gets in, what the app sees afterwards, and
+// what must never leak.
+
 package main
 
 import (
@@ -8,16 +11,23 @@ import (
 	"testing"
 )
 
+// wantForbidden is the exact body of the 403 response.
 const wantForbidden = "yonder: this link needs the access token. Scan the QR code from the person sharing.\n"
+
+// wantAuthCookie is the exact Set-Cookie value the gate sets after a valid token.
 const wantAuthCookie = "yonder_18000=T0K; Path=/; HttpOnly; SameSite=Lax"
 
+// recorder is a stand-in app that remembers whether it was called and which request it got.
 type recorder struct {
 	called bool
 	req    *http.Request
 }
 
+// ServeHTTP records the request, so tests can inspect what the gate let through.
 func (u *recorder) ServeHTTP(w http.ResponseWriter, r *http.Request) { u.called, u.req = true, r }
 
+// serveAuth sends one request through the gate, in front of a recorder, and returns the gate's
+// response and the recorder.
 func serveAuth(method, target string, hdr http.Header) (*httptest.ResponseRecorder, *recorder) {
 	up := &recorder{}
 	req := httptest.NewRequest(method, target, nil)
@@ -29,6 +39,8 @@ func serveAuth(method, target string, hdr http.Header) (*httptest.ResponseRecord
 	return rec, up
 }
 
+// TestNewToken checks that tokens are 22 characters (16 random bytes), URL-safe, and different
+// every time.
 func TestNewToken(t *testing.T) {
 	a, b := newToken(), newToken()
 	if a == b {
@@ -42,6 +54,8 @@ func TestNewToken(t *testing.T) {
 	}
 }
 
+// assertForbidden fails the test unless the response is the 403 page and the app was never
+// called.
 func assertForbidden(t *testing.T, rec *httptest.ResponseRecorder, up *recorder) {
 	t.Helper()
 	if rec.Code != http.StatusForbidden || rec.Body.String() != wantForbidden {
@@ -52,11 +66,14 @@ func assertForbidden(t *testing.T, rec *httptest.ResponseRecorder, up *recorder)
 	}
 }
 
+// TestAuthNoToken checks that a request without a token gets 403 and never reaches the app.
 func TestAuthNoToken(t *testing.T) {
 	rec, up := serveAuth("GET", "/", nil)
 	assertForbidden(t, rec, up)
 }
 
+// TestAuthWrongToken checks that a wrong token in the query, or a stale cookie from an earlier
+// run, gets 403.
 func TestAuthWrongToken(t *testing.T) {
 	rec, up := serveAuth("GET", "/?yonder=nope", nil)
 	assertForbidden(t, rec, up)
@@ -64,6 +81,8 @@ func TestAuthWrongToken(t *testing.T) {
 	assertForbidden(t, rec, up)
 }
 
+// TestAuthQueryTokenRedirects checks that a GET or HEAD with the right token sets the cookie
+// and redirects to the same address without the token, keeping the other parameters in order.
 func TestAuthQueryTokenRedirects(t *testing.T) {
 	tests := []struct{ method, target, location string }{
 		{"GET", "/?yonder=T0K", "/"},
@@ -85,6 +104,8 @@ func TestAuthQueryTokenRedirects(t *testing.T) {
 	}
 }
 
+// TestAuthQueryTokenPostForwards checks that a POST with the right token is forwarded (a
+// redirect would lose its body) without the token, and still sets the cookie.
 func TestAuthQueryTokenPostForwards(t *testing.T) {
 	rec, up := serveAuth("POST", "/api?yonder=T0K&x=2", nil)
 	if !up.called || up.req.URL.RawQuery != "x=2" {
@@ -95,6 +116,8 @@ func TestAuthQueryTokenPostForwards(t *testing.T) {
 	}
 }
 
+// TestAuthCookiePasses checks that a valid cookie lets the request through and that the app
+// sees only its own cookies.
 func TestAuthCookiePasses(t *testing.T) {
 	_, up := serveAuth("GET", "/", http.Header{"Cookie": {"yonder_18000=T0K; session=abc"}})
 	if !up.called || up.req.Header.Get("Cookie") != "session=abc" {
@@ -106,6 +129,8 @@ func TestAuthCookiePasses(t *testing.T) {
 	}
 }
 
+// TestAuthCookieWithBadParam checks that a bad token in the query does not block a request that
+// already has a valid cookie, and is not passed on.
 func TestAuthCookieWithBadParam(t *testing.T) {
 	_, up := serveAuth("GET", "/?yonder=nope&y=1", http.Header{"Cookie": {"yonder_18000=T0K"}})
 	if !up.called || up.req.URL.RawQuery != "y=1" {
@@ -113,11 +138,15 @@ func TestAuthCookieWithBadParam(t *testing.T) {
 	}
 }
 
+// TestAuthUpgradeWithoutCookie checks that a WebSocket upgrade without the cookie gets 403 and
+// never reaches the app.
 func TestAuthUpgradeWithoutCookie(t *testing.T) {
 	rec, up := serveAuth("GET", "/", http.Header{"Connection": {"Upgrade"}, "Upgrade": {"websocket"}})
 	assertForbidden(t, rec, up)
 }
 
+// TestAuthKeepsRawAppCookies checks that cookie values with quotes, JSON or non-ASCII text
+// reach the app byte for byte.
 func TestAuthKeepsRawAppCookies(t *testing.T) {
 	_, up := serveAuth("GET", "/", http.Header{"Cookie": {`yonder_18000=T0K; j={"a":1}; q="v"; u=café; e=`}})
 	if want := `j={"a":1}; q="v"; u=café; e=`; !up.called || up.req.Header.Get("Cookie") != want {
@@ -125,6 +154,8 @@ func TestAuthKeepsRawAppCookies(t *testing.T) {
 	}
 }
 
+// TestAuthRedirectStaysOnSite checks that the redirect target never starts with two slashes, so
+// a crafted link cannot send a visitor to another website.
 func TestAuthRedirectStaysOnSite(t *testing.T) {
 	for _, target := range []string{"//evil.com/?yonder=T0K", "///evil.com/x?yonder=T0K"} {
 		rec, _ := serveAuth("GET", target, nil)
@@ -135,6 +166,8 @@ func TestAuthRedirectStaysOnSite(t *testing.T) {
 	}
 }
 
+// TestAuthStripsEveryYonderCookie checks that cookies of other yonder instances
+// (yonder_<digits>) are removed before the app sees the request.
 func TestAuthStripsEveryYonderCookie(t *testing.T) {
 	_, up := serveAuth("GET", "/", http.Header{"Cookie": {"yonder_13000=OTHER; yonder_18000=T0K; session=abc"}})
 	if !up.called || up.req.Header.Get("Cookie") != "session=abc" {
@@ -142,6 +175,8 @@ func TestAuthStripsEveryYonderCookie(t *testing.T) {
 	}
 }
 
+// TestAuthKeepsAppCookiesNamedLikeYonder checks that an app cookie such as yonder_theme is not
+// mistaken for a yonder cookie and still reaches the app.
 func TestAuthKeepsAppCookiesNamedLikeYonder(t *testing.T) {
 	_, up := serveAuth("GET", "/", http.Header{"Cookie": {"yonder_18000=T0K; yonder_theme=dark; yonder_9=old"}})
 	if got := up.req.Header.Get("Cookie"); got != "yonder_theme=dark" {
@@ -149,6 +184,8 @@ func TestAuthKeepsAppCookiesNamedLikeYonder(t *testing.T) {
 	}
 }
 
+// TestAuthTokenRequestsSendNoReferrer checks that a request carrying the token gets Referrer-
+// Policy: no-referrer, so the token cannot leak in a Referer header.
 func TestAuthTokenRequestsSendNoReferrer(t *testing.T) {
 	rec, _ := serveAuth("POST", "/api?yonder=T0K", nil)
 	if got := rec.Header().Get("Referrer-Policy"); got != "no-referrer" {
@@ -156,6 +193,8 @@ func TestAuthTokenRequestsSendNoReferrer(t *testing.T) {
 	}
 }
 
+// TestAuthRedirectIgnoresOpaqueTarget checks that a request whose URL has an opaque part (a
+// malformed absolute-form target) cannot become a redirect to another website.
 func TestAuthRedirectIgnoresOpaqueTarget(t *testing.T) {
 	req := httptest.NewRequest("GET", "/?yonder=T0K", nil)
 	req.URL.Opaque = `\evil.com`
@@ -166,6 +205,8 @@ func TestAuthRedirectIgnoresOpaqueTarget(t *testing.T) {
 	}
 }
 
+// TestAuthRedirectKeepsEncodedPath checks that an encoded slash (%2F) in the path survives the
+// redirect exactly as the app expects it.
 func TestAuthRedirectKeepsEncodedPath(t *testing.T) {
 	rec, _ := serveAuth("GET", "/a%2Fb?yonder=T0K&x=1", nil)
 	if got := rec.Header().Get("Location"); got != "/a%2Fb?x=1" {
@@ -173,6 +214,8 @@ func TestAuthRedirectKeepsEncodedPath(t *testing.T) {
 	}
 }
 
+// TestAuthNoReferrerBeatsUpstreamPolicy checks that even when the app sets its own Referrer-
+// Policy, the response carries only no-referrer.
 func TestAuthNoReferrerBeatsUpstreamPolicy(t *testing.T) {
 	up := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Referrer-Policy", "unsafe-url")

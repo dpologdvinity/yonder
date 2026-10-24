@@ -1,3 +1,7 @@
+// proxy.go forwards requests to the dev server on localhost and keeps the visitor's view of it
+// consistent: it rewrites the Host and Origin headers, redirects and cookies. It also holds the
+// request log and the "device connected" notice, which wrap every handler in yonder.
+
 package main
 
 import (
@@ -14,6 +18,8 @@ import (
 	"time"
 )
 
+// clientHostKey is the context key under which the proxy stores the host name the visitor used,
+// so redirects from the app can be pointed back at it.
 type clientHostKey struct{}
 
 // newProxy forwards to targetAddr while making the request look local,
@@ -104,11 +110,14 @@ func withLog(h http.Handler, w io.Writer, now func() time.Time) http.Handler {
 	})
 }
 
+// statusRecorder wraps a ResponseWriter to remember the status code, which the request log
+// prints. It passes everything else through, including WebSocket upgrades and file streaming.
 type statusRecorder struct {
 	http.ResponseWriter
 	status int
 }
 
+// WriteHeader records the first status code the handler sends and then forwards it.
 func (s *statusRecorder) WriteHeader(code int) {
 	if s.status == 0 {
 		s.status = code

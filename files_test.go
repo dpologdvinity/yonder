@@ -1,3 +1,6 @@
+// files_test.go tests the file server in files.go: listings, downloads, and the rules that keep
+// hidden files, links and paths outside the folder out of reach.
+
 package main
 
 import (
@@ -11,6 +14,7 @@ import (
 	"testing"
 )
 
+// secret is the text of files that must never be served.
 const secret = "TOP SECRET"
 
 // fileFixture builds a shared folder with hidden files, odd names and an escaping symlink.
@@ -55,6 +59,7 @@ func fileFixture(t *testing.T) *os.Root {
 	return root
 }
 
+// getFile sends a GET with the given headers to h and returns the recorded response.
 func getFile(h http.Handler, target string, hdr http.Header) *httptest.ResponseRecorder {
 	req := httptest.NewRequest("GET", target, nil)
 	for k, v := range hdr {
@@ -65,6 +70,8 @@ func getFile(h http.Handler, target string, hdr http.Header) *httptest.ResponseR
 	return rec
 }
 
+// TestFilesListing checks that the root listing is a phone-friendly page, escapes odd file
+// names, shows folders before files, and shows no hidden entries.
 func TestFilesListing(t *testing.T) {
 	rec := getFile(newFileServer(fileFixture(t), "", false), "/", nil)
 	body := rec.Body.String()
@@ -91,6 +98,8 @@ func TestFilesListing(t *testing.T) {
 	}
 }
 
+// TestFilesServeFile checks that a file downloads in full and that a Range request gets just
+// that part (206).
 func TestFilesServeFile(t *testing.T) {
 	h := newFileServer(fileFixture(t), "", false)
 	if rec := getFile(h, "/sub/b.txt", nil); rec.Code != 200 || rec.Body.String() != "bee" {
@@ -101,6 +110,8 @@ func TestFilesServeFile(t *testing.T) {
 	}
 }
 
+// TestFilesSubfolderRedirect checks that a folder address without a trailing slash redirects to
+// the one with it, because the listing's links depend on it.
 func TestFilesSubfolderRedirect(t *testing.T) {
 	rec := getFile(newFileServer(fileFixture(t), "", false), "/sub", nil)
 	if rec.Code != http.StatusMovedPermanently && rec.Code != http.StatusFound || rec.Header().Get("Location") != "/sub/" {
@@ -108,6 +119,8 @@ func TestFilesSubfolderRedirect(t *testing.T) {
 	}
 }
 
+// TestFilesHidden checks that files and folders whose names start with a dot (.env, .git) give
+// 404.
 func TestFilesHidden(t *testing.T) {
 	h := newFileServer(fileFixture(t), "", false)
 	for _, p := range []string{"/.env", "/.git/config", "/.git/"} {
@@ -117,6 +130,8 @@ func TestFilesHidden(t *testing.T) {
 	}
 }
 
+// TestFilesNoEscape checks that ".." paths, encoded dots and a symlink to a file outside the
+// folder cannot reach anything outside it.
 func TestFilesNoEscape(t *testing.T) {
 	h := newFileServer(fileFixture(t), "", false)
 	for _, p := range []string{"/../x", "/%2e%2e/x", "/sub/../../x", "/out"} {
@@ -127,6 +142,8 @@ func TestFilesNoEscape(t *testing.T) {
 	}
 }
 
+// TestFilesSingle checks that in single-file mode only that one file is reachable and the
+// listing shows only it.
 func TestFilesSingle(t *testing.T) {
 	h := newFileServer(fileFixture(t), "index.txt", false)
 	if rec := getFile(h, "/index.txt", nil); rec.Code != 200 || rec.Body.String() != "index" {
@@ -141,6 +158,7 @@ func TestFilesSingle(t *testing.T) {
 	}
 }
 
+// TestHumanSize checks that file sizes print with 1024-based units such as "1.5 MB".
 func TestHumanSize(t *testing.T) {
 	for n, want := range map[int64]string{0: "0 B", 999: "999 B", 1024: "1.0 KB", 1536 * 1024: "1.5 MB"} {
 		if got := humanSize(n); got != want {
@@ -149,6 +167,8 @@ func TestHumanSize(t *testing.T) {
 	}
 }
 
+// TestFilesSymlinksRefused checks that symlinks are neither served nor listed, even when they
+// point at another file inside the folder.
 func TestFilesSymlinksRefused(t *testing.T) {
 	h := newFileServer(fileFixture(t), "", false)
 	for _, p := range []string{"/envlink", "/out"} {
@@ -164,6 +184,8 @@ func TestFilesSymlinksRefused(t *testing.T) {
 	}
 }
 
+// TestFilesOddNames checks that file names with a colon work and that a folder named with a
+// question mark redirects to a correctly escaped address.
 func TestFilesOddNames(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows forbids : and ? in file names")
@@ -181,6 +203,8 @@ func TestFilesOddNames(t *testing.T) {
 	}
 }
 
+// TestSafeRel checks that URL paths become folder-relative names, and that hidden names,
+// backslashes and Windows-only unsafe names are refused.
 func TestSafeRel(t *testing.T) {
 	tests := []struct {
 		path    string
@@ -205,6 +229,8 @@ func TestSafeRel(t *testing.T) {
 	}
 }
 
+// TestFilesSingleModeRefusesUpload checks that a single-file share rejects uploads with 405
+// even if the upload switch is on.
 func TestFilesSingleModeRefusesUpload(t *testing.T) {
 	dir, root := uploadDir(t)
 	rec := postFiles(newFileServer(root, "index.txt", true), "/", part{"x.txt", "x"})
@@ -216,6 +242,8 @@ func TestFilesSingleModeRefusesUpload(t *testing.T) {
 	}
 }
 
+// TestFilesTitleIsFolderName checks that the page title and heading are the folder's name, not
+// its URL path.
 func TestFilesTitleIsFolderName(t *testing.T) {
 	root := fileFixture(t)
 	h := newFileServer(root, "", false)
@@ -228,6 +256,8 @@ func TestFilesTitleIsFolderName(t *testing.T) {
 	}
 }
 
+// TestFilesListingCap checks that a listing stops at maxListing entries and says that the
+// folder has more.
 func TestFilesListingCap(t *testing.T) {
 	old := maxListing
 	maxListing = 3
@@ -244,6 +274,7 @@ func TestFilesListingCap(t *testing.T) {
 	}
 }
 
+// TestFilesCapCountsOnlyVisible checks that hidden files do not count toward the listing cap.
 func TestFilesCapCountsOnlyVisible(t *testing.T) {
 	old := maxListing
 	maxListing = 3
@@ -263,6 +294,8 @@ func TestFilesCapCountsOnlyVisible(t *testing.T) {
 	}
 }
 
+// TestFilesSingleModeListsItsFileInBigFolder checks that a single-file share still lists its
+// file when its folder holds far more files than the cap.
 func TestFilesSingleModeListsItsFileInBigFolder(t *testing.T) {
 	old := maxListing
 	maxListing = 3
@@ -280,6 +313,9 @@ func TestFilesSingleModeListsItsFileInBigFolder(t *testing.T) {
 	}
 }
 
+// TestFilesUploadModeSandboxesContent checks that with uploads on, file responses carry nosniff
+// and a sandbox policy, and that with uploads off they do not, so shared static sites keep
+// working.
 func TestFilesUploadModeSandboxesContent(t *testing.T) {
 	_, root := uploadDir(t)
 	rec := getFile(newFileServer(root, "", true), "/index.txt", nil)
@@ -292,6 +328,8 @@ func TestFilesUploadModeSandboxesContent(t *testing.T) {
 	}
 }
 
+// TestVisibleName checks that the listing hides the same names the server would refuse to
+// serve, including the Windows-only rules.
 func TestVisibleName(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -308,6 +346,8 @@ func TestVisibleName(t *testing.T) {
 	}
 }
 
+// TestFilesCapKeepsAlphabeticalFirst checks that when a listing is cut, the entries kept are
+// the alphabetically first ones and not an arbitrary few.
 func TestFilesCapKeepsAlphabeticalFirst(t *testing.T) {
 	old := maxListing
 	maxListing = 3

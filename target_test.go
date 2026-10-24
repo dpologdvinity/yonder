@@ -1,3 +1,5 @@
+// target_test.go tests detecting which loopback address the dev server listens on.
+
 package main
 
 import (
@@ -6,6 +8,7 @@ import (
 	"testing"
 )
 
+// TestFindTargetIPv4 checks that a server on 127.0.0.1 is found there.
 func TestFindTargetIPv4(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -23,6 +26,8 @@ func TestFindTargetIPv4(t *testing.T) {
 	}
 }
 
+// TestFindTargetIPv6Only checks that a server on ::1 only, which is common with Node.js, is
+// found there.
 func TestFindTargetIPv6Only(t *testing.T) {
 	ln, err := net.Listen("tcp", "[::1]:0")
 	if err != nil {
@@ -40,6 +45,7 @@ func TestFindTargetIPv6Only(t *testing.T) {
 	}
 }
 
+// TestFindTargetNothing checks that with no server running the error names the port.
 func TestFindTargetNothing(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

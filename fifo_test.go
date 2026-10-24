@@ -1,3 +1,6 @@
+// fifo_test.go checks that special files such as named pipes are neither listed nor opened. It
+// does not build on Windows, which has no named pipes in the file system.
+
 //go:build !windows
 
 package main
@@ -11,6 +14,8 @@ import (
 	"time"
 )
 
+// TestFilesSkipsSpecialFiles checks that a named pipe is left out of the listing and that
+// asking for it gives 404 at once instead of blocking the request forever.
 func TestFilesSkipsSpecialFiles(t *testing.T) {
 	dir, root := uploadDir(t)
 	if err := syscall.Mkfifo(filepath.Join(dir, "pipe"), 0o644); err != nil {

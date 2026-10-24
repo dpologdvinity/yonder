@@ -1,3 +1,5 @@
+// port_test.go tests choosing the port that other devices connect to.
+
 package main
 
 import (
@@ -7,6 +9,7 @@ import (
 	"testing"
 )
 
+// listenerPort returns the port a listener is bound to.
 func listenerPort(ln net.Listener) int { return ln.Addr().(*net.TCPAddr).Port }
 
 // freeTargetPort returns a port p where p+10000 is a valid, currently free port.
@@ -35,6 +38,7 @@ func freeTargetPort(t *testing.T) int {
 	return 0
 }
 
+// TestListenDefault checks that by default yonder listens on the shared port plus 10000.
 func TestListenDefault(t *testing.T) {
 	p := freeTargetPort(t)
 	ln, err := listen(p, 0)
@@ -47,6 +51,7 @@ func TestListenDefault(t *testing.T) {
 	}
 }
 
+// TestListenDefaultBusy checks that when that port is taken, yonder falls back to a free one.
 func TestListenDefaultBusy(t *testing.T) {
 	p := freeTargetPort(t)
 	busy, err := net.Listen("tcp", "0.0.0.0:"+strconv.Itoa(p+10000))
@@ -65,6 +70,8 @@ func TestListenDefaultBusy(t *testing.T) {
 	}
 }
 
+// TestListenDefaultOverflow checks that a shared port whose value plus 10000 is above 65535
+// also falls back to a free port.
 func TestListenDefaultOverflow(t *testing.T) {
 	ln, err := listen(60000, 0)
 	if err != nil {
@@ -76,6 +83,8 @@ func TestListenDefaultOverflow(t *testing.T) {
 	}
 }
 
+// TestListenExplicitBusy checks that a --listen port that is taken is an error and not a
+// fallback.
 func TestListenExplicitBusy(t *testing.T) {
 	busy, err := net.Listen("tcp", "0.0.0.0:0")
 	if err != nil {

@@ -1,3 +1,17 @@
+// Command yonder shares a website running on localhost, or a file or folder, with other devices
+// on the same network. It prints a link and a QR code; only people who have the link can open
+// it.
+//
+// Usage:
+//
+//	yonder <port>               share the site running on localhost:<port>
+//	yonder <path>               share a file or folder
+//	yonder <folder> --upload    also accept files sent from other devices
+//	yonder <target> --open      share without the secret token (trusted networks only)
+//	yonder <target> --listen N  use N as the public port
+//	yonder --version            print the version
+//
+// See README.md for how to use it and ARCHITECTURE.md for how it works.
 package main
 
 import (
@@ -21,21 +35,28 @@ import (
 	"github.com/mdp/qrterminal/v4"
 )
 
-// version is set by goreleaser; `go install` builds fall back to the module version.
-// fileBasePort stands in for the shared port in file mode, so the default listen
-// port is fileBasePort + 10000 = 18000.
+// fileBasePort stands in for the shared port in file mode. The default listen port is always
+// the shared port plus 10000, so file shares use 8000 + 10000 = 18000.
 const fileBasePort = 8000
 
+// version is the release version. goreleaser sets it at build time with -ldflags; the init
+// function fills it from the module version for builds made with "go install".
 var version = "dev"
 
+// init fills version from the module's build information when the binary was built without
+// goreleaser, for example by "go install github.com/dpologdvinity/yonder@latest".
 func init() {
 	if bi, ok := debug.ReadBuildInfo(); ok && version == "dev" && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
 		version = strings.TrimPrefix(bi.Main.Version, "v")
 	}
 }
 
+// usage is the help text. It is printed to stdout for --help and to stderr, after the reason,
+// when the arguments are wrong.
 const usage = "usage: yonder <port|path> [--listen N] [--open] [--upload]\n       yonder --version\n"
 
+// options holds the parsed command line. Exactly one of port and path is set, unless
+// showVersion is true.
 type options struct {
 	port, listenPort  int
 	path              string // set instead of port when sharing files
@@ -43,6 +64,8 @@ type options struct {
 	upload            bool // accept files from other devices (folders only)
 }
 
+// main runs yonder until it receives an interrupt, terminate or hang-up signal, then exits with
+// the code that run returns.
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	code := run(os.Args[1:], os.Stdout, os.Stderr, ctx)
@@ -96,6 +119,10 @@ func parseArgs(args []string) (options, error) {
 	return o, nil
 }
 
+// run is yonder's whole life cycle, separated from main so tests can call it. It parses args,
+// finds what to share, starts the web server on all interfaces, prints the link and QR code to
+// stdout, and serves until ctx is cancelled. It returns the process exit code: 0 after a clean
+// stop, 1 for any error, which is reported on stderr.
 func run(args []string, stdout, stderr io.Writer, ctx context.Context) int {
 	opts, err := parseArgs(args)
 	if errors.Is(err, flag.ErrHelp) {

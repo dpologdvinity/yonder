@@ -1,3 +1,6 @@
+// upload_script_test.go runs the listing page's inline script in Node.js to check the in-
+// browser upload size warning. The test is skipped when Node.js is not installed.
+
 package main
 
 import (
@@ -52,6 +55,8 @@ console.log(JSON.stringify({prevented, alerted}));`, maxUpload, strings.Join(fil
 	return res.Prevented, message
 }
 
+// TestUploadPageSizeCheck checks that the page warns before an upload when the files plus the
+// form overhead would go over the server's limit, and does not warn below it.
 func TestUploadPageSizeCheck(t *testing.T) {
 	limit := maxUpload
 	tests := []struct {

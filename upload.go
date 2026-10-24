@@ -1,3 +1,7 @@
+// upload.go receives files that other devices send to a shared folder. Uploads stream to a
+// hidden temporary file and are renamed into place without ever overwriting an existing file,
+// so a stopped or failed upload never leaves a half-written file under a real name.
+
 package main
 
 import (
@@ -75,6 +79,8 @@ func receiveUpload(w http.ResponseWriter, r *http.Request, root *os.Root, dir, b
 // errBadName marks a name the filesystem refused (too long, reserved on Windows).
 var errBadName = errors.New("refused file name")
 
+// uploadError turns an upload failure into the matching HTTP error: 413 when the size limit was
+// hit, 400 when the file name was refused, and 500 for anything else.
 func uploadError(w http.ResponseWriter, err error) {
 	if errors.Is(err, errBadName) {
 		http.Error(w, "yonder: the file name was refused", http.StatusBadRequest)

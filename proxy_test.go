@@ -1,3 +1,6 @@
+// proxy_test.go tests the proxy in proxy.go and the log wrappers: header and redirect
+// rewriting, WebSockets, streaming, restarts, the request log, and the device-connected notice.
+
 package main
 
 import (
@@ -13,10 +16,14 @@ import (
 	"time"
 )
 
+// clientHost is the address a phone would type, used as the Host header in tests.
 const clientHost = "192.168.1.20:13000"
 
+// frontFunc builds the handler placed in front of an upstream, so one test body can run with
+// and without the log wrapper.
 type frontFunc func(targetAddr string, port int) http.Handler
 
+// plainProxy is the bare proxy, with nothing in front of it.
 func plainProxy(targetAddr string, port int) http.Handler { return newProxy(targetAddr, port) }
 
 // setup starts upstream and a proxy in front of it. It returns the front URL and the upstream port.
@@ -69,6 +76,8 @@ func do(t *testing.T, method, url string, hdr http.Header) reply {
 	return reply{resp.StatusCode, resp.Header, body}
 }
 
+// TestProxyHostRewrite checks that the app sees Host: localhost:<port>, which dev servers that
+// check the host accept.
 func TestProxyHostRewrite(t *testing.T) {
 	var gotHost string
 	url, port := setup(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { gotHost = r.Host }), plainProxy)
@@ -78,6 +87,8 @@ func TestProxyHostRewrite(t *testing.T) {
 	}
 }
 
+// TestProxyOriginRewrite checks that an Origin matching the visitor's address is rewritten to
+// localhost and that no X-Forwarded-Host is added.
 func TestProxyOriginRewrite(t *testing.T) {
 	var gotOrigin, gotXFH string
 	url, port := setup(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -92,6 +103,8 @@ func TestProxyOriginRewrite(t *testing.T) {
 	}
 }
 
+// TestProxyForeignOriginUnchanged checks that an Origin from another website is left alone, so
+// the app's own cross-site checks still work.
 func TestProxyForeignOriginUnchanged(t *testing.T) {
 	var gotOrigin string
 	url, _ := setup(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { gotOrigin = r.Header.Get("Origin") }), plainProxy)
@@ -101,6 +114,8 @@ func TestProxyForeignOriginUnchanged(t *testing.T) {
 	}
 }
 
+// TestProxyLocationRewrite checks that redirects to localhost addresses are pointed back at the
+// visitor's address, and that redirects elsewhere and relative ones are left alone.
 func TestProxyLocationRewrite(t *testing.T) {
 	var loc string
 	url, port := setup(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -125,6 +140,8 @@ func TestProxyLocationRewrite(t *testing.T) {
 	}
 }
 
+// TestProxySetCookieDomain checks that Domain=localhost is removed from cookies, which browsers
+// would reject on an IP address, and that other attributes stay.
 func TestProxySetCookieDomain(t *testing.T) {
 	url, _ := setup(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Add("Set-Cookie", "sid=1; Domain=localhost; Path=/; HttpOnly")
@@ -154,6 +171,8 @@ var echoUpgrade = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) 
 	_, _ = io.Copy(conn, rw)
 })
 
+// checkUpgrade opens a protocol-upgrade connection (like a WebSocket) through the handler that
+// front builds, and checks that bytes flow both ways.
 func checkUpgrade(t *testing.T, front frontFunc) {
 	t.Helper()
 	url, _ := setup(t, echoUpgrade, front)
@@ -180,6 +199,8 @@ func checkUpgrade(t *testing.T, front frontFunc) {
 	}
 }
 
+// checkSSE checks that a server-sent event reaches the client at once instead of being held
+// back.
 func checkSSE(t *testing.T, front frontFunc) {
 	t.Helper()
 	done := make(chan struct{})
@@ -211,9 +232,15 @@ func checkSSE(t *testing.T, front frontFunc) {
 	}
 }
 
+// TestProxyUpgrade checks that protocol upgrades such as WebSockets pass through the bare
+// proxy.
 func TestProxyUpgrade(t *testing.T) { checkUpgrade(t, plainProxy) }
-func TestProxySSE(t *testing.T)     { checkSSE(t, plainProxy) }
 
+// TestProxySSE checks that server-sent events stream through the bare proxy.
+func TestProxySSE(t *testing.T) { checkSSE(t, plainProxy) }
+
+// TestProxyUpstreamRestart checks that while the app is down visitors get a clear 502, and that
+// once it is back the next request succeeds.
 func TestProxyUpstreamRestart(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -252,6 +279,8 @@ func TestProxyUpstreamRestart(t *testing.T) {
 	}
 }
 
+// TestWithLogLine checks that the request log line has the time, method, path with query,
+// status and visitor address.
 func TestWithLogLine(t *testing.T) {
 	var log strings.Builder
 	now := func() time.Time { return time.Date(2026, 10, 23, 14, 3, 9, 0, time.Local) }
@@ -265,12 +294,16 @@ func TestWithLogLine(t *testing.T) {
 	}
 }
 
+// loggedProxy is the proxy wrapped in the request log.
 func loggedProxy(targetAddr string, port int) http.Handler {
 	return withLog(newProxy(targetAddr, port), io.Discard, time.Now)
 }
 
+// TestWithLogKeepsUpgrade checks that the log wrapper does not break protocol upgrades.
 func TestWithLogKeepsUpgrade(t *testing.T) { checkUpgrade(t, loggedProxy) }
-func TestWithLogKeepsSSE(t *testing.T)     { checkSSE(t, loggedProxy) }
+
+// TestWithLogKeepsSSE checks that the log wrapper does not break event streams.
+func TestWithLogKeepsSSE(t *testing.T) { checkSSE(t, loggedProxy) }
 
 // syncBuf is a goroutine-safe log sink.
 type syncBuf struct {
@@ -278,9 +311,13 @@ type syncBuf struct {
 	b  strings.Builder
 }
 
+// Write appends p to the buffer while holding the lock.
 func (s *syncBuf) Write(p []byte) (int, error) { s.mu.Lock(); defer s.mu.Unlock(); return s.b.Write(p) }
-func (s *syncBuf) String() string              { s.mu.Lock(); defer s.mu.Unlock(); return s.b.String() }
 
+// String returns the buffered text while holding the same lock.
+func (s *syncBuf) String() string { s.mu.Lock(); defer s.mu.Unlock(); return s.b.String() }
+
+// TestWithLogUpgradeStatus checks that an upgraded connection is logged with status 101.
 func TestWithLogUpgradeStatus(t *testing.T) {
 	log := &syncBuf{}
 	checkUpgrade(t, func(a string, p int) http.Handler { return withLog(newProxy(a, p), log, time.Now) })
@@ -294,6 +331,8 @@ func TestWithLogUpgradeStatus(t *testing.T) {
 	}
 }
 
+// TestWithLogAbortedHandlerStillLogs checks that a handler that aborts mid-stream still gets a
+// log line, stamped with the time the request started.
 func TestWithLogAbortedHandlerStillLogs(t *testing.T) {
 	var log strings.Builder
 	times := []time.Time{time.Date(2026, 1, 1, 10, 0, 0, 0, time.Local), time.Date(2026, 1, 1, 11, 0, 0, 0, time.Local)}
@@ -311,13 +350,17 @@ func TestWithLogAbortedHandlerStillLogs(t *testing.T) {
 	}
 }
 
+// fakeConn is a net.Conn that only knows its remote address.
 type fakeConn struct {
 	net.Conn
 	addr net.Addr
 }
 
+// RemoteAddr returns the address the test gave the fake connection.
 func (f fakeConn) RemoteAddr() net.Addr { return f.addr }
 
+// TestConnLoggerFirstConnectionPerDevice checks that the "device connected" line appears once
+// per visitor address, on its first new connection only.
 func TestConnLoggerFirstConnectionPerDevice(t *testing.T) {
 	var log strings.Builder
 	now := func() time.Time { return time.Date(2026, 10, 23, 2, 41, 53, 0, time.Local) }
@@ -337,6 +380,8 @@ func TestConnLoggerFirstConnectionPerDevice(t *testing.T) {
 	}
 }
 
+// TestWithLogHidesToken checks that the share token never appears in the log, even in malformed
+// or encoded queries, while other parameters stay.
 func TestWithLogHidesToken(t *testing.T) {
 	for _, uri := range []string{
 		"/a?x=1&yonder=SECRET&y=2",
@@ -364,11 +409,15 @@ type readFromWriter struct {
 	readFromCalls int
 }
 
+// ReadFrom counts the call and then copies, standing in for a response writer that supports
+// sendfile.
 func (w *readFromWriter) ReadFrom(r io.Reader) (int64, error) {
 	w.readFromCalls++
 	return io.Copy(&w.ResponseRecorder, r)
 }
 
+// TestWithLogKeepsSendfile checks that the log wrapper still lets file downloads use the
+// response writer's fast ReadFrom path.
 func TestWithLogKeepsSendfile(t *testing.T) {
 	var log strings.Builder
 	w := &readFromWriter{ResponseRecorder: *httptest.NewRecorder()}

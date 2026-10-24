@@ -1,3 +1,8 @@
+// auth.go is the access gate. Every request must carry the secret share token, either in the
+// link's query string on the first visit or in the cookie that visit set. Requests without it
+// get 403 and never reach the app. The gate also strips its own token and cookie before the
+// request moves on, and keeps the token out of Referer headers and the log.
+
 package main
 
 import (
@@ -11,6 +16,7 @@ import (
 	"strings"
 )
 
+// tokenParam is the name of the query parameter that carries the share token ("?yonder=...").
 const tokenParam = "yonder"
 
 // newToken returns 128 random bits, URL-safe. A new token every run cuts off old links.
@@ -130,11 +136,15 @@ func redactToken(rawQuery string) string {
 // any policy the app sets, so the token in the address bar cannot leak through Referer.
 type noReferrerWriter struct{ http.ResponseWriter }
 
+// WriteHeader sets the Referrer-Policy header just before the status line goes out, so it
+// replaces any policy the app chose.
 func (w noReferrerWriter) WriteHeader(code int) {
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.ResponseWriter.WriteHeader(code)
 }
 
+// Write sets the Referrer-Policy header before the first body bytes, for handlers that never
+// call WriteHeader.
 func (w noReferrerWriter) Write(b []byte) (int, error) {
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	return w.ResponseWriter.Write(b)

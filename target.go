@@ -1,3 +1,5 @@
+// target.go checks which loopback address the dev server is really listening on.
+
 package main
 
 import (

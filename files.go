@@ -1,3 +1,7 @@
+// files.go serves a shared file or folder: the HTML listing page and the file downloads. All
+// disk access goes through os.Root, hidden files and links are never listed or served, and when
+// uploads are on, files are sandboxed so a page someone uploaded cannot run script on yonder.
+
 package main
 
 import (
@@ -16,6 +20,8 @@ import (
 	"strings"
 )
 
+// listingTmpl is the HTML page that lists a folder. It is mobile friendly, and when uploads are
+// on it also holds the upload form and the small script that checks the size in the browser.
 var listingTmpl = template.Must(template.New("list").Parse(`<!doctype html>
 <html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -29,6 +35,8 @@ var listingTmpl = template.Must(template.New("list").Parse(`<!doctype html>
 {{end}}</body></html>
 `))
 
+// crossOrigin refuses uploads that another website's page started (a "cross-site request
+// forgery"), using the browser's Origin and Sec-Fetch-Site headers.
 var crossOrigin = http.NewCrossOriginProtection()
 
 // maxListing caps one folder listing. A var so tests can lower it.
@@ -38,6 +46,7 @@ var maxListing = 5000
 // millions of files cannot make the listing page use unbounded time or memory.
 const scanLimit = 100000
 
+// listEntry is one row of the listing page.
 type listEntry struct{ Name, Href, Size string }
 
 // newFileServer serves files from root. With only set, just that one file is reachable.
@@ -128,6 +137,9 @@ func listingTitle(root *os.Root, rel, only string) string {
 	return path.Base(rel)
 }
 
+// serveListing writes the HTML listing of the folder rel. In single-file mode it lists only the
+// shared file. Otherwise it shows the first maxListing visible entries, sorted with folders
+// first, and says so when it cut the list.
 func serveListing(w http.ResponseWriter, root *os.Root, rel, only, title string, upload bool) {
 	dir, err := root.Open(rel)
 	if err != nil {
