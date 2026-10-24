@@ -9,7 +9,10 @@ builds:
       - -s -w -X main.version={{.Version}}
 
 archives:
-  - formats: [tar.gz]
+  # install.sh, npm/install.js, pypi/build_wheels.py and the package repos download these
+  # exact names. Change the template and all of them break.
+  - name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
     format_overrides:
       - goos: windows
         formats: [zip]

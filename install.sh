@@ -1,7 +1,9 @@
 #!/bin/sh
 # Install yonder: curl -fsSL https://raw.githubusercontent.com/dpologdvinity/yonder/master/install.sh | sh
 # Downloads the latest release for this OS and CPU, checks its SHA-256, and installs
-# to /usr/local/bin if writable, otherwise ~/.local/bin. Set YONDER_INSTALL_DIR to override.
+# to /usr/local/bin if writable, otherwise ~/.local/bin.
+#   YONDER_INSTALL_DIR  install somewhere else
+#   YONDER_VERSION      install this version (for example 0.4.3) instead of the latest
 set -eu
 
 # Everything runs inside main, called on the last line, so a truncated download runs nothing.
@@ -20,7 +22,11 @@ main() {
     *) echo "yonder: unsupported CPU $(uname -m)" >&2; exit 1 ;;
   esac
 
-  tag=$(curl -fsSL "https://api.github.com/repos/$repo/releases/latest" | sed -n 's/.*"tag_name": *"\(v[^"]*\)".*/\1/p')
+  if [ -n "${YONDER_VERSION:-}" ]; then
+    tag="v${YONDER_VERSION#v}"
+  else
+    tag=$(curl -fsSL "https://api.github.com/repos/$repo/releases/latest" | sed -n 's/.*"tag_name": *"\(v[^"]*\)".*/\1/p')
+  fi
   [ -n "$tag" ] || { echo "yonder: could not find the latest release" >&2; exit 1; }
   ver=${tag#v}
   file="yonder_${ver}_${os}_${arch}.tar.gz"
@@ -28,7 +34,7 @@ main() {
 
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' EXIT
-  curl -fsSL -o "$tmp/$file" "$base/$file"
+  curl -fsSL -o "$tmp/$file" "$base/$file" || { echo "yonder: could not download $file; is $tag a real release?" >&2; exit 1; }
   curl -fsSL -o "$tmp/checksums.txt" "$base/checksums.txt"
 
   want=$(awk -v f="$file" '$2 == f {print $1}' "$tmp/checksums.txt")

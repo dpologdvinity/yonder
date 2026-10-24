@@ -100,7 +100,7 @@ Same QR code and token as port sharing. The default port is 18000.
 - Hidden files and folders (`.env`, `.git`, `.ssh`, anything starting with `.`) are never listed or served.
 - Symlinks inside the shared folder are skipped, and `..` can't reach outside it.
 - Share a dedicated folder, not your home directory.
-- Add `--upload` to let the other device send files into the folder: the page gets an Upload button (on a phone it opens the photo picker or Files). Existing files are never overwritten (`photo (1).jpg`), hidden or path-like names are refused, and one upload is capped at 4 GB. Uploads are off unless you pass the flag.
+- Add `--upload` to let the other device send files into the folder: the page gets an Upload button (on a phone it opens the photo picker or Files). Existing files are never overwritten (`photo (1).jpg`), folder parts of a name are dropped (`../../x.txt` is saved as `x.txt`), hidden names are refused, and one upload is capped at 4 GB. Uploads are off unless you pass the flag.
 - A folder named like a number is a port to yonder: use `yonder ./3000`.
 
 ## Is it safe?

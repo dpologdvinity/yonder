@@ -8,7 +8,13 @@ install()
     const child = spawn(bin, process.argv.slice(2), { stdio: "inherit" });
     // Pass termination on to yonder: if only this wrapper were killed, the share would keep running.
     for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) {
-      process.on(sig, () => child.kill(sig));
+      if (process.platform === "win32" && sig === "SIGINT") {
+        // On Windows, Ctrl-C already reaches yonder directly, and child.kill() would force-quit it
+        // before it can remove half-finished uploads. Stay alive until it exits by itself.
+        process.on(sig, () => {});
+      } else {
+        process.on(sig, () => child.kill(sig));
+      }
     }
     child.on("error", (err) => {
       console.error(`yonder: ${err.message}`);
