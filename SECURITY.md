@@ -33,7 +33,7 @@ yonder assumes that other devices on your network are **not trusted** and that *
 - the token does not appear in logs or in `Referer` headers;
 - with `--approve`, a device that has the link still sees nothing until the owner allows it, and a device the owner refused stays refused for the rest of the run;
 - with `--for`, nothing is shared after the time is up;
-- with `--public`, the network port still only accepts private addresses, a visitor cannot choose the address yonder believes (forged `CF-Connecting-IP`, `X-Forwarded-For` and similar headers are ignored on the network port and removed on both), and the tunnel can reach only its own separate port.
+- with `--public`, the network port still only accepts private addresses, a remote visitor cannot choose the address yonder believes (forged `CF-Connecting-IP`, `X-Forwarded-For` and similar headers are ignored on the network port and removed on both), and the tunnel can reach only its own separate port.
 
 [ARCHITECTURE.md](ARCHITECTURE.md#7-security-design) explains how each of these is enforced and tested. A way around any of them is a vulnerability.
 
@@ -42,6 +42,7 @@ yonder assumes that other devices on your network are **not trusted** and that *
 These are known limits, described in the [README](README.md#known-limitations), not vulnerabilities:
 
 - **Traffic is plain HTTP.** On open Wi-Fi, or on WPA2 with a shared password, someone on the network can read it and copy the token. Use a trusted network, or do not share private data.
+- **Programs on your own computer** can connect to the loopback tunnel port and claim any visitor address or country in the approval question. They still need the token.
 - **Cloudflare can read `--public` traffic**, including the token and cookies, because it ends the TLS connection. Quick tunnels also have no uptime promise.
 - **`--open` has no token** by design. Use it only on networks you trust.
 - **Cookies are not scoped by port.** Another web service on the same IP address receives yonder's cookie.

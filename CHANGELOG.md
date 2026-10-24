@@ -5,7 +5,7 @@ All notable changes to yonder are listed here. The format follows [Keep a Change
 ## [Unreleased]
 
 ### Added
-- `--public` (and `--no-approve`): share over the internet through a Cloudflare quick tunnel, using an installed `cloudflared`. Defaults to `--for 1h` and `--approve`; refuses `--open`. The approval question shows the visitor's address and country. The tunnel points at a separate loopback port, and only that port believes Cloudflare's visitor headers.
+- `--public` (and `--no-approve`): share over the internet through a Cloudflare quick tunnel, using an installed `cloudflared`. Defaults to `--for 1h` and `--approve`; refuses `--open`. The approval question shows the visitor's address and country. The tunnel points at a separate loopback port, and only that port believes Cloudflare's visitor headers. Over the tunnel, the proxy keeps `https` in same-site `Origin` checks and in redirects. A refused visitor is blocked for the rest of the run.
 
 ## [0.5.0] - 2026-10-24
 

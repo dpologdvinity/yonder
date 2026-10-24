@@ -180,13 +180,16 @@ Because anyone on the internet who gets the link can try it, `--public` is stric
 - The link stops after one hour (`--for` changes this, up to `7d`).
 - `--approve` is on: you see the visitor's address and country and answer `y` or `n`. `--no-approve` turns it off.
 - `--open` is refused.
-- Cookies are marked `Secure`, and the tunnel is the only way in: the tunnel points at a separate port that only your computer can reach.
+- Visitors who come through the tunnel get `Secure` cookies. The tunnel points at its own port, which only programs on your computer can reach; the link on your network stays open as usual, so anyone on your network who has the link still needs your approval too.
+- If you refuse a device, that visitor address is blocked until you stop yonder. Several people behind one shared address (an office, a phone carrier) are blocked together.
 
 Know the limits:
 
 - **Cloudflare carries your traffic and can read it.** Do not share secrets this way.
 - Quick tunnels are for testing: no uptime promise, at most 200 requests at once (more get a `429`), no server-sent events, and the address changes on every run. Large request bodies (uploads of about 100 MB or more) may be refused by Cloudflare.
-- Link previews (iMessage, Slack, Discord) fetch the link and appear as a device to approve.
+- Link previews (iMessage, Slack, Discord) fetch the link and appear as a device to approve. Refuse them.
+- People who come through the tunnel do not get a "device connected" line; their requests appear in the log with their real address.
+- If yonder is killed without a chance to clean up (`kill -9`, a crash of the computer), `cloudflared` may keep running with nothing behind it. It serves nothing, but you can stop it with `pkill cloudflared`.
 
 ## How it works
 
