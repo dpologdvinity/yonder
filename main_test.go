@@ -31,6 +31,8 @@ func TestParseArgs(t *testing.T) {
 		{[]string{"notes.pdf", "--open"}, options{path: "notes.pdf", open: true}},
 		{[]string{"abc"}, options{path: "abc"}},
 		{[]string{"./docs", "--upload"}, options{path: "./docs", upload: true}},
+		{[]string{"3000", "--for", "30m"}, options{port: 3000, forDur: 30 * time.Minute}},
+		{[]string{"--for", "1d", "./docs"}, options{path: "./docs", forDur: 24 * time.Hour}},
 		{[]string{"--version"}, options{showVersion: true}},
 		{[]string{"3000", "--version"}, options{showVersion: true}},
 	}
@@ -41,7 +43,7 @@ func TestParseArgs(t *testing.T) {
 		}
 	}
 
-	bad := [][]string{{}, {""}, {"3000", "--upload"}, {"0"}, {"70000"}, {"-1"}, {"3000", "4000"}, {"3000", "--listen", "x"}, {"3000", "--listen", "70000"}, {"3000", "--nope"}}
+	bad := [][]string{{}, {""}, {"3000", "--upload"}, {"0"}, {"70000"}, {"-1"}, {"3000", "4000"}, {"3000", "--listen", "x"}, {"3000", "--listen", "70000"}, {"3000", "--nope"}, {"3000", "--for", "soon"}, {"3000", "--for", "0"}, {"3000", "--for"}}
 	for _, args := range bad {
 		if _, err := parseArgs(args); err == nil {
 			t.Errorf("parseArgs(%q): want error, got nil", args)
@@ -53,7 +55,7 @@ func TestParseArgs(t *testing.T) {
 // 1.
 func TestRunUsage(t *testing.T) {
 	var out, errOut strings.Builder
-	if code := run([]string{"70000"}, &out, &errOut, context.Background()); code != 1 {
+	if code := run([]string{"70000"}, strings.NewReader(""), &out, &errOut, context.Background()); code != 1 {
 		t.Errorf("exit code = %d, want 1", code)
 	}
 	if !strings.Contains(errOut.String(), "usage: yonder") || !strings.Contains(errOut.String(), "yonder: invalid port") {
@@ -72,7 +74,7 @@ func TestRunNothingListening(t *testing.T) {
 	_ = ln.Close()
 
 	var out, errOut strings.Builder
-	if code := run([]string{fmt.Sprint(port)}, &out, &errOut, context.Background()); code != 1 {
+	if code := run([]string{fmt.Sprint(port)}, strings.NewReader(""), &out, &errOut, context.Background()); code != 1 {
 		t.Errorf("exit code = %d, want 1", code)
 	}
 	if want := fmt.Sprintf("yonder: nothing is listening on localhost:%d\n", port); errOut.String() != want {
@@ -85,7 +87,7 @@ func TestRunNothingListening(t *testing.T) {
 func TestRunHelpExitsZero(t *testing.T) {
 	for _, flagName := range []string{"-h", "--help"} {
 		var out, errOut strings.Builder
-		if code := run([]string{flagName}, &out, &errOut, context.Background()); code != 0 {
+		if code := run([]string{flagName}, strings.NewReader(""), &out, &errOut, context.Background()); code != 0 {
 			t.Errorf("%s: exit code = %d, want 0", flagName, code)
 		}
 		if !strings.HasPrefix(out.String(), "usage: yonder <port|path> [--listen N] [--open] [--upload]") || errOut.Len() != 0 {
@@ -98,7 +100,7 @@ func TestRunHelpExitsZero(t *testing.T) {
 // path.
 func TestRunMissingPath(t *testing.T) {
 	var out, errOut strings.Builder
-	if code := run([]string{"/nonexistent/x"}, &out, &errOut, context.Background()); code != 1 {
+	if code := run([]string{"/nonexistent/x"}, strings.NewReader(""), &out, &errOut, context.Background()); code != 1 {
 		t.Errorf("exit code = %d, want 1", code)
 	}
 	if want := "yonder: no such file or folder: /nonexistent/x\n"; errOut.String() != want {
@@ -150,7 +152,7 @@ func TestFileHandlerUploadNeedsFolder(t *testing.T) {
 // as the usage text.
 func TestRunUsageErrorsSayWhy(t *testing.T) {
 	var out, errOut strings.Builder
-	if code := run([]string{"3000", "--upload"}, &out, &errOut, context.Background()); code != 1 {
+	if code := run([]string{"3000", "--upload"}, strings.NewReader(""), &out, &errOut, context.Background()); code != 1 {
 		t.Errorf("exit code = %d, want 1", code)
 	}
 	if !strings.Contains(errOut.String(), "yonder: --upload needs a folder") {
@@ -210,7 +212,7 @@ func runInProcess(t *testing.T, args ...string) (stdout string, code int) {
 	var errOut syncBuf
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan int, 1)
-	go func() { done <- run(args, &out, &errOut, ctx) }()
+	go func() { done <- run(args, strings.NewReader(""), &out, &errOut, ctx) }()
 	deadline := time.Now().Add(10 * time.Second)
 	for !strings.Contains(out.String(), "can open") { // both warning lines contain it, and it is the banner's last line
 		select {
@@ -268,5 +270,46 @@ func TestRunOpenModeInProcess(t *testing.T) {
 	out, code := runInProcess(t, t.TempDir(), "--open", "--listen", fmt.Sprint(freePort(t)))
 	if code != 0 || strings.Contains(out, "yonder=") || !strings.Contains(out, "Anyone on this network can open this URL (--open)") {
 		t.Errorf("code %d, output %q; want exit 0, no token and the --open warning", code, out)
+	}
+}
+
+// TestParseDuration checks the --for values: Go durations, whole days with "d", the limits
+// (above zero, at most 7 days) and the error for anything else.
+func TestParseDuration(t *testing.T) {
+	good := map[string]time.Duration{
+		"90s": 90 * time.Second, "30m": 30 * time.Minute, "2h": 2 * time.Hour,
+		"1d": 24 * time.Hour, "1d12h": 36 * time.Hour, "7d": 7 * 24 * time.Hour,
+		"168h": 7 * 24 * time.Hour, "500ms": 500 * time.Millisecond,
+	}
+	for in, want := range good {
+		if got, err := parseDuration(in); err != nil || got != want {
+			t.Errorf("parseDuration(%q) = %v, %v; want %v", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"", "0", "0s", "-5m", "8d", "169h", "soon", "1x", "d", "1d-2h", "1.5d"} {
+		if _, err := parseDuration(in); err == nil || !strings.Contains(err.Error(), "invalid --for") {
+			t.Errorf("parseDuration(%q): err = %v, want an 'invalid --for' error", in, err)
+		}
+	}
+}
+
+// TestRunStopsWhenTheTimeIsUp checks that --for ends the run by itself: yonder says the time
+// is up, exits with code 0, and the banner told the owner when the link stops working.
+func TestRunStopsWhenTheTimeIsUp(t *testing.T) {
+	var out, errOut syncBuf
+	done := make(chan int, 1)
+	go func() {
+		done <- run([]string{t.TempDir(), "--for", "1500ms", "--listen", fmt.Sprint(freePort(t))}, strings.NewReader(""), &out, &errOut, context.Background())
+	}()
+	select {
+	case code := <-done:
+		if strings.Contains(errOut.String(), "no network connection") || strings.Contains(errOut.String(), "public address") {
+			t.Skip("no private network address on this machine")
+		}
+		if code != 0 || !strings.Contains(out.String(), "The time is up, so yonder is stopping.") || !strings.Contains(out.String(), "This link works for 1.5s") {
+			t.Errorf("code %d, stdout %q, stderr %q; want exit 0, the banner line and the stop message", code, out.String(), errOut.String())
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("yonder did not stop by itself after --for elapsed")
 	}
 }

@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"runtime/debug"
 	"strconv"
@@ -63,7 +64,7 @@ func versionFromBuildInfo(current, module string) string {
 
 // usage is the help text. It is printed to stdout for --help and to stderr, after the reason,
 // when the arguments are wrong.
-const usage = "usage: yonder <port|path> [--listen N] [--open] [--upload]\n       yonder --version\n"
+const usage = "usage: yonder <port|path> [--listen N] [--open] [--upload] [--for TIME]\n       yonder --version\n"
 
 // options holds the parsed command line. Exactly one of port and path is set, unless
 // showVersion is true.
@@ -71,14 +72,15 @@ type options struct {
 	port, listenPort  int
 	path              string // set instead of port when sharing files
 	open, showVersion bool
-	upload            bool // accept files from other devices (folders only)
+	upload            bool          // accept files from other devices (folders only)
+	forDur            time.Duration // stop sharing after this long; 0 means no limit
 }
 
 // main runs yonder until it receives an interrupt, terminate or hang-up signal, then exits with
 // the code that run returns.
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
-	code := run(os.Args[1:], os.Stdout, os.Stderr, ctx)
+	code := run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr, ctx)
 	stop()
 	os.Exit(code)
 }
@@ -92,6 +94,7 @@ func parseArgs(args []string) (options, error) {
 	fs.BoolVar(&o.open, "open", false, "")
 	fs.BoolVar(&o.upload, "upload", false, "")
 	fs.BoolVar(&o.showVersion, "version", false, "")
+	forText := fs.String("for", "", "")
 	if err := fs.Parse(args); err != nil {
 		return options{}, err
 	}
@@ -126,14 +129,58 @@ func parseArgs(args []string) (options, error) {
 	if o.listenPort < 0 || o.listenPort > 65535 {
 		return options{}, fmt.Errorf("invalid --listen port %d", o.listenPort)
 	}
+	if *forText != "" {
+		d, err := parseDuration(*forText)
+		if err != nil {
+			return options{}, err
+		}
+		o.forDur = d
+	}
 	return o, nil
+}
+
+// maxFor is the longest time --for accepts. A share that should last longer is better run
+// again, with a fresh link, than left open for weeks.
+const maxFor = 7 * 24 * time.Hour
+
+// dayRe matches a leading number of days in a --for value such as "1d" or "1d12h".
+var dayRe = regexp.MustCompile(`^(\d+)d(.*)$`)
+
+// parseDuration reads a --for value: a Go duration ("90s", "30m", "2h"), optionally with a
+// leading whole number of days ("1d", "1d12h"). It must be above zero and at most 7 days.
+func parseDuration(s string) (time.Duration, error) {
+	bad := fmt.Errorf("invalid --for %q: use a time such as 30m, 2h or 1d (more than 0, at most 7d)", s)
+	var days time.Duration
+	rest := s
+	if m := dayRe.FindStringSubmatch(s); m != nil {
+		n, err := strconv.Atoi(m[1])
+		if err != nil || n > 7 {
+			return 0, bad
+		}
+		days, rest = time.Duration(n)*24*time.Hour, m[2]
+	}
+	var d time.Duration
+	if rest != "" {
+		var err error
+		if d, err = time.ParseDuration(rest); err != nil || d < 0 {
+			return 0, bad
+		}
+	} else if days == 0 {
+		return 0, bad
+	}
+	total := days + d
+	if total <= 0 || total > maxFor {
+		return 0, bad
+	}
+	return total, nil
 }
 
 // run is yonder's whole life cycle, separated from main so tests can call it. It parses args,
 // finds what to share, starts the web server on all interfaces, prints the link and QR code to
-// stdout, and serves until ctx is cancelled. It returns the process exit code: 0 after a clean
-// stop, 1 for any error, which is reported on stderr.
-func run(args []string, stdout, stderr io.Writer, ctx context.Context) int {
+// stdout, and serves until ctx is cancelled or the --for time is up. stdin is where yonder
+// asks questions, such as which new devices to approve. It returns the process exit code: 0
+// after a clean stop, 1 for any error, which is reported on stderr.
+func run(args []string, stdin io.Reader, stdout, stderr io.Writer, ctx context.Context) int {
 	opts, err := parseArgs(args)
 	if errors.Is(err, flag.ErrHelp) {
 		say(stdout, "%s", usage)
@@ -147,62 +194,80 @@ func run(args []string, stdout, stderr io.Writer, ctx context.Context) int {
 		say(stdout, "yonder %s\n", version)
 		return 0
 	}
-	fail := func(err error) int {
+	if err := serve(ctx, opts, stdin, stdout); err != nil {
 		say(stderr, "yonder: %v\n", err)
 		return 1
 	}
+	return 0
+}
 
-	var handler http.Handler
-	var what string
-	port := opts.port
+// shareTarget is what yonder shares: the handler that answers requests, a description for
+// the banner, the port number the public port is derived from, and how to release it.
+type shareTarget struct {
+	handler http.Handler
+	what    string
+	port    int
+	closeFn func() error
+}
+
+// chooseTarget turns the command line into something to share: a proxy to a local port, or a
+// file server for a path.
+func chooseTarget(opts options) (shareTarget, error) {
 	if opts.path != "" {
 		h, abs, closeRoot, err := fileHandler(opts.path, opts.upload)
 		if err != nil {
-			return fail(err)
+			return shareTarget{}, err
 		}
-		defer func() { _ = closeRoot() }() // best effort: the process is about to exit
-		handler, what, port = h, abs, fileBasePort
-	} else {
-		target, err := findTarget(port)
-		if err != nil {
-			return fail(err)
-		}
-		handler, what = newProxy(target, port), fmt.Sprintf("localhost:%d", port)
+		return shareTarget{handler: h, what: abs, port: fileBasePort, closeFn: closeRoot}, nil
 	}
+	target, err := findTarget(opts.port)
+	if err != nil {
+		return shareTarget{}, err
+	}
+	return shareTarget{
+		handler: newProxy(target, opts.port),
+		what:    fmt.Sprintf("localhost:%d", opts.port),
+		port:    opts.port,
+		closeFn: func() error { return nil },
+	}, nil
+}
+
+// serve shares what opts names and blocks until ctx is cancelled, the --for time is up, or
+// the server fails. A normal stop returns nil.
+func serve(ctx context.Context, opts options, stdin io.Reader, stdout io.Writer) error {
+	share, err := chooseTarget(opts)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = share.closeFn() }() // best effort: the process is about to exit
+
 	addrs, err := systemLANAddrs()
 	if err != nil {
-		return fail(err)
+		return err
 	}
 	if len(addrs) == 0 {
-		return fail(noAddrError(defaultRouteIP()))
+		return noAddrError(defaultRouteIP())
 	}
-	ln, err := listen(port, opts.listenPort)
+	ln, err := listen(share.port, opts.listenPort)
 	if err != nil {
-		return fail(err)
+		return err
 	}
 	actual := ln.Addr().(*net.TCPAddr).Port
 
+	handler := share.handler
 	suffix, warning := "", "Anyone on this network can open this URL (--open)."
 	if !opts.open {
 		token := newToken()
 		handler = withAuth(handler, token, actual)
 		suffix, warning = "/?yonder="+token, "Only people with this link or QR code can open it."
 	}
+	printBanner(stdout, opts, share.what, addrs, actual, suffix, warning)
 
-	url := fmt.Sprintf("http://%s:%d%s", addrs[0], actual, suffix)
-	say(stdout, "yonder: sharing %s\n\n  %s\n", what, url)
-	qrterminal.GenerateHalfBlock(url, qrterminal.L, stdout)
-	for _, a := range addrs[1:] {
-		say(stdout, "  also: http://%s:%d%s\n", a, actual, suffix)
+	if opts.forDur > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, opts.forDur)
+		defer cancel()
 	}
-	say(stdout, "\n%s\n", warning)
-	if opts.upload {
-		say(stdout, "Uploads are on: files sent from other devices land in %s.\n", what)
-	}
-	if hint := detectWSLHint(); hint != "" {
-		say(stdout, "\n%s", hint)
-	}
-	say(stdout, "\n")
 
 	// No write timeout: SSE and WebSockets are long-lived. The header timeout stops slowloris.
 	srv := &http.Server{Handler: withLog(handler, stdout, time.Now), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute, ConnState: newConnLogger(stdout, time.Now)}
@@ -210,14 +275,39 @@ func run(args []string, stdout, stderr io.Writer, ctx context.Context) int {
 	go func() { served <- srv.Serve(ln) }()
 	select {
 	case <-ctx.Done():
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			say(stdout, "\nThe time is up, so yonder is stopping.\n")
+		}
 		// Close, not Shutdown: Shutdown waits on hijacked WebSocket connections.
 		_ = srv.Close() // best effort: the process is about to exit
 		// Let half-finished uploads remove their temp files before the shared folder closes.
 		waitUploads(3 * time.Second)
-		return 0
+		return nil
 	case err := <-served:
-		return fail(err)
+		return err
 	}
+}
+
+// printBanner prints what is shared, the link (and any other links), the QR code, the access
+// warning, and notes about uploads, the time limit and WSL.
+func printBanner(w io.Writer, opts options, what string, addrs []net.IP, port int, suffix, warning string) {
+	url := fmt.Sprintf("http://%s:%d%s", addrs[0], port, suffix)
+	say(w, "yonder: sharing %s\n\n  %s\n", what, url)
+	qrterminal.GenerateHalfBlock(url, qrterminal.L, w)
+	for _, a := range addrs[1:] {
+		say(w, "  also: http://%s:%d%s\n", a, port, suffix)
+	}
+	say(w, "\n%s\n", warning)
+	if opts.upload {
+		say(w, "Uploads are on: files sent from other devices land in %s.\n", what)
+	}
+	if opts.forDur > 0 {
+		say(w, "This link works for %s, until %s.\n", opts.forDur, time.Now().Add(opts.forDur).Format("15:04"))
+	}
+	if hint := detectWSLHint(); hint != "" {
+		say(w, "\n%s", hint)
+	}
+	say(w, "\n")
 }
 
 // fileHandler opens path for sharing: a folder is served whole, a file alone.
