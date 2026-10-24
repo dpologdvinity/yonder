@@ -67,7 +67,8 @@ func rewriteLocation(h http.Header, port int, client string) {
 	case fmt.Sprintf("localhost:%d", port), fmt.Sprintf("127.0.0.1:%d", port), fmt.Sprintf("[::1]:%d", port):
 		match = true
 	case "localhost", "127.0.0.1", "[::1]":
-		match = port == 80
+		// A bare host means the scheme's default port: 80 for http, but 443 for https, a different server.
+		match = port == 80 && strings.EqualFold(u.Scheme, "http")
 	}
 	if match {
 		u.Scheme, u.Host = "http", client

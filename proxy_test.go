@@ -466,3 +466,14 @@ func TestStatusRecorderReadFromFallback(t *testing.T) {
 		t.Errorf("body %q, log %q; want the bytes copied and status 200 logged", rec.Body.String(), log.String())
 	}
 }
+
+// TestProxyLocationRewritePort80OnlyForHTTP checks that a bare "localhost" is only taken to
+// mean port 80 when the redirect uses http. With https it means port 443, a different server,
+// so the redirect must be left alone.
+func TestProxyLocationRewritePort80OnlyForHTTP(t *testing.T) {
+	h := http.Header{"Location": {"https://localhost/login"}}
+	rewriteLocation(h, 80, "192.168.1.50:8080")
+	if got := h.Get("Location"); got != "https://localhost/login" {
+		t.Errorf("got %q, want the https redirect left alone", got)
+	}
+}
