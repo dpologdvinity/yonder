@@ -225,6 +225,13 @@ func (t *connTracker) track(c net.Conn, s http.ConnState) {
 	t.conns[c] = struct{}{}
 }
 
+// untrack removes a closed connection from the tracker.
+func (t *connTracker) untrack(c net.Conn) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.conns, c)
+}
+
 // closeAll closes every remembered connection once, and forgets them.
 func (t *connTracker) closeAll() {
 	t.mu.Lock()
@@ -234,4 +241,45 @@ func (t *connTracker) closeAll() {
 	for c := range conns {
 		_ = c.Close() // best effort: the connection may already be gone
 	}
+}
+
+// wrap returns a net.Listener that wraps accepted connections so connTracker is notified on Close.
+func (t *connTracker) wrap(ln net.Listener) net.Listener {
+	return &trackingListener{Listener: ln, tracker: t}
+}
+
+// trackingListener wraps a net.Listener to produce trackedConn instances whose Close method
+// notifies connTracker when closed.
+type trackingListener struct {
+	net.Listener
+	tracker *connTracker
+}
+
+// Accept waits for and returns the next connection to the listener, wrapped in trackedConn.
+func (l *trackingListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	return &trackedConn{Conn: c, tracker: l.tracker}, nil
+}
+
+// trackedConn wraps net.Conn to notify its connTracker when the connection is closed.
+type trackedConn struct {
+	net.Conn
+	tracker *connTracker
+	once    sync.Once
+}
+
+// Close closes the underlying connection and untracks it from connTracker.
+func (c *trackedConn) Close() error {
+	c.once.Do(func() {
+		c.tracker.untrack(c)
+	})
+	return c.Conn.Close()
+}
+
+// Unwrap returns the underlying net.Conn.
+func (c *trackedConn) Unwrap() net.Conn {
+	return c.Conn
 }

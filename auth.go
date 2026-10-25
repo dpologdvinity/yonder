@@ -63,8 +63,12 @@ func withAuthDevices(h http.Handler, token string, listenPort int, devices *devi
 
 		newDevice := false
 		if devices != nil && !viaCookie { // the link proves the token; this browser is new
-			id, ok := devices.beginFrom(r.RemoteAddr, r.UserAgent(), requestCountry(r))
-			if !ok {
+			id, res := devices.beginFrom(r.RemoteAddr, r.UserAgent(), requestCountry(r))
+			switch res {
+			case beginRefused:
+				refuse(w, http.StatusForbidden, "yonder: The owner chose not to allow this device.\n")
+				return
+			case beginBusy:
 				refuse(w, http.StatusTooManyRequests, "yonder: Too many devices are waiting for approval. Try again in a moment.\n")
 				return
 			}
@@ -83,7 +87,7 @@ func withAuthDevices(h http.Handler, token string, listenPort int, devices *devi
 			if r.Method == http.MethodGet || r.Method == http.MethodHead {
 				// One leading slash only: "//host" would be an open redirect.
 				// Built from Path and RawQuery only: RequestURI() would also include Opaque.
-				target := "/" + strings.TrimLeft(out.URL.EscapedPath(), "/") // keeps %2F as the app sent it
+				target := "/" + strings.TrimLeft(out.URL.EscapedPath(), "/\\") // keeps %2F as the app sent it
 				if out.URL.RawQuery != "" {
 					target += "?" + out.URL.RawQuery
 				}

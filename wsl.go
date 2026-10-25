@@ -4,9 +4,11 @@
 package main
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // natHint is the message printed when WSL runs in NAT mode and other devices cannot connect.
@@ -28,7 +30,9 @@ func detectWSLHint() string {
 	if err != nil || !strings.Contains(strings.ToLower(string(rel)), "microsoft") {
 		return ""
 	}
-	mode, err := exec.Command("wslinfo", "--networking-mode").Output()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	mode, err := exec.CommandContext(ctx, "wslinfo", "--networking-mode").Output()
 	if err != nil {
 		return ""
 	}

@@ -427,3 +427,38 @@ func TestPromptShowsTheAddressWithoutThePort(t *testing.T) {
 		t.Errorf("prompt = %q, want the address without its port", text)
 	}
 }
+
+// TestDeviceTableActivePromptNotExpired checks that a device actively presented in runPrompts
+// is not removed by forgetLeavers when the operator takes longer than pendingTTL to answer.
+func TestDeviceTableActivePromptNotExpired(t *testing.T) {
+	tab := newDeviceTable()
+	now := time.Now()
+	tab.now = func() time.Time { return now }
+
+	id, ok := tab.begin("192.168.1.10:50000", "UA")
+	if !ok {
+		t.Fatal("begin failed")
+	}
+
+	d := tab.next(t.Context())
+	if d == nil || d.id != id {
+		t.Fatalf("next = %v, want device %s", d, id)
+	}
+
+	// Advance clock past pendingTTL so forgetLeavers would normally drop it.
+	now = now.Add(pendingTTL + time.Minute)
+	tab.begin("192.168.1.20:50000", "UA") // triggers forgetLeavers()
+
+	if st, known := tab.state(id); !known || st != devPending {
+		t.Fatalf("state = %v, %v; want active device kept pending", st, known)
+	}
+
+	// Operator answers "n" after timeout: device is denied and group is refused.
+	tab.decide(id, false)
+	if st, _ := tab.state(id); st != devDenied {
+		t.Fatalf("after decide state = %v, want denied", st)
+	}
+	if _, ok := tab.begin("192.168.1.10:50001", "UA"); ok {
+		t.Fatal("refused address group was allowed to begin again")
+	}
+}

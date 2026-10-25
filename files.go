@@ -43,8 +43,8 @@ var crossOrigin = http.NewCrossOriginProtection()
 var maxListing = 5000
 
 // scanLimit bounds how many entries one request reads from a folder, so a folder with
-// millions of files cannot make the listing page use unbounded time or memory.
-const scanLimit = 100000
+// millions of files cannot make the listing page use unbounded time or memory. A var so tests can lower it.
+var scanLimit = 100000
 
 // listEntry is one row of the listing page.
 type listEntry struct{ Name, Href, Size string }
@@ -148,6 +148,7 @@ func serveListing(w http.ResponseWriter, root *os.Root, rel, only, title string,
 	}
 	defer dir.Close()
 	var visible []fs.DirEntry
+	var moreInDir bool
 	switch {
 	case only != "":
 		// Single-file share: never scan the folder, it may be huge and the file might sit anywhere.
@@ -155,22 +156,26 @@ func serveListing(w http.ResponseWriter, root *os.Root, rel, only, title string,
 			visible = append(visible, fs.FileInfoToDirEntry(fi))
 		}
 	default:
-		// Read in batches and count only entries we will show, so hidden files and links
-		// never eat the cap.
-		for len(visible) <= scanLimit {
+		// Read in batches and count total scanned entries to bound folder traversal, so a folder
+		// with millions of files cannot make the listing page use unbounded time or memory.
+		scanned := 0
+		for scanned < scanLimit && len(visible) <= maxListing {
 			batch, err := dir.ReadDir(512)
+			scanned += len(batch)
 			for _, e := range batch {
 				if visibleName(e.Name(), runtime.GOOS == "windows") && (e.IsDir() || e.Type().IsRegular()) {
 					visible = append(visible, e)
 				}
 			}
 			if err == io.EOF {
+				moreInDir = false
 				break
 			}
 			if err != nil {
 				http.Error(w, "cannot read folder", http.StatusInternalServerError)
 				return
 			}
+			moreInDir = true
 		}
 	}
 	// Sort first, then cut: the page shows the alphabetically first entries, folders first.
@@ -180,8 +185,8 @@ func serveListing(w http.ResponseWriter, root *os.Root, rel, only, title string,
 		}
 		return visible[i].Name() < visible[j].Name()
 	})
-	truncated := len(visible) > maxListing
-	if truncated {
+	truncated := len(visible) > maxListing || moreInDir
+	if len(visible) > maxListing {
 		visible = visible[:maxListing]
 	}
 

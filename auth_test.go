@@ -86,6 +86,8 @@ func TestAuthWrongToken(t *testing.T) {
 func TestAuthQueryTokenRedirects(t *testing.T) {
 	tests := []struct{ method, target, location string }{
 		{"GET", "/?yonder=T0K", "/"},
+		{"GET", "//evil.com?yonder=T0K", "/evil.com"},
+		{"GET", "/\\evil.com?yonder=T0K", "/%5Cevil.com"},
 		{"GET", "/app?a=1&yonder=T0K", "/app?a=1"},
 		{"GET", "/app?b=2&yonder=T0K&a=1", "/app?b=2&a=1"},
 		{"HEAD", "/?yonder=T0K", "/"},
@@ -247,5 +249,31 @@ func TestAuthKeepsStatusAndFlushThroughNoReferrerWriter(t *testing.T) {
 	}
 	if got := rec.Header().Get("Referrer-Policy"); got != "no-referrer" {
 		t.Errorf("Referrer-Policy = %q, want no-referrer", got)
+	}
+}
+
+// TestAuthRefusedReturnsForbidden checks that once an address group has been refused by the
+// owner, subsequent attempts to start approval return 403 Forbidden instead of 429.
+func TestAuthRefusedReturnsForbidden(t *testing.T) {
+	tab := newDeviceTable()
+	id, ok := tab.begin("192.168.1.50:50000", "UA")
+	if !ok {
+		t.Fatal("begin failed")
+	}
+	tab.decide(id, false) // refuse device
+
+	up := &recorder{}
+	h := withAuthDevices(up, "T0K", 18000, tab)
+
+	req := httptest.NewRequest("GET", "/?yonder=T0K", nil)
+	req.RemoteAddr = "192.168.1.50:50001" // new connection from same address
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("got status %d, want 403 Forbidden", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "chose not to allow") {
+		t.Errorf("body = %q, want refusal message", rec.Body.String())
 	}
 }

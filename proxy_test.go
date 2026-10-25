@@ -521,3 +521,50 @@ func TestConnTrackerClosesHijackedConnections(t *testing.T) {
 		t.Errorf("a second closeAll closed the connection again (%d)", ws.closed)
 	}
 }
+
+// TestConnTrackerUntracksOnClose checks that wrapped connections that close during normal
+// operation are removed from the tracker, preventing a memory leak for hijacked WebSockets.
+func TestConnTrackerUntracksOnClose(t *testing.T) {
+	tr := newConnTracker()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	wrapped := tr.wrap(ln)
+	defer func() { _ = wrapped.Close() }()
+
+	connCh := make(chan net.Conn, 1)
+	go func() {
+		c, err := wrapped.Accept()
+		if err == nil {
+			connCh <- c
+		}
+	}()
+
+	client, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = client.Close() }()
+
+	serverConn := <-connCh
+	tr.track(serverConn, http.StateHijacked)
+
+	tr.mu.Lock()
+	count := len(tr.conns)
+	tr.mu.Unlock()
+	if count != 1 {
+		t.Fatalf("tracker count = %d, want 1", count)
+	}
+
+	_ = serverConn.Close()
+
+	tr.mu.Lock()
+	count = len(tr.conns)
+	tr.mu.Unlock()
+	if count != 0 {
+		t.Errorf("after Close, tracker count = %d, want 0", count)
+	}
+}

@@ -58,7 +58,7 @@ func lanAddrs(ifaces []iface, best net.IP) []net.IP {
 // isVirtual reports container bridges, VM host-only networks and VPN tunnels.
 func isVirtual(name string) bool {
 	name = strings.ToLower(name)
-	for _, p := range []string{"docker", "br-", "veth", "vboxnet", "vmnet", "bridge", "tun", "utun", "tap", "wg", "ppp"} {
+	for _, p := range []string{"docker", "br-", "veth", "vboxnet", "vmnet", "virbr", "bridge", "tun", "utun", "tap", "wg", "ppp"} {
 		if strings.HasPrefix(name, p) {
 			return true
 		}

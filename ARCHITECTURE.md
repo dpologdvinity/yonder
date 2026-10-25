@@ -306,4 +306,4 @@ Lint and static checks: `gofmt`, `go vet` (also for Windows and macOS), `golangc
 | Change the address shown in the QR code | `lanAddrs` and `isVirtual` in `lan.go` |
 | Add an install channel | A new job or repository that downloads the release, and a section in this document and the README |
 
-Features that are planned but not built: sharing over the internet and HTTPS on the local network. Each would sit in the handler chain in section 5 and would need its own threat analysis in section 7.
+Features that are planned but not built: HTTPS on the local network. It would sit in the handler chain in section 5 and would need its own threat analysis in section 7.

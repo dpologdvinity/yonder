@@ -69,6 +69,10 @@ func TestLanAddrs(t *testing.T) {
 		}, net.ParseIP("192.168.1.5"), []string{"192.168.1.5", "192.168.50.5"}},
 		{"best filtered out", ifs, net.ParseIP("10.255.255.254"), []string{"10.207.68.227", "172.17.0.1"}},
 		{"no interfaces", nil, nil, []string{}},
+		{"virbr bridge", []iface{
+			{"eth0", net.FlagUp, ips("192.168.1.5")},
+			{"virbr0", net.FlagUp, ips("192.168.122.1")},
+		}, nil, []string{"192.168.1.5", "192.168.122.1"}},
 		{"duplicate address", []iface{
 			{"eth0", net.FlagUp, ips("192.168.1.5")},
 			{"eth0:1", net.FlagUp, ips("192.168.1.5", "192.168.1.6")},
@@ -103,5 +107,13 @@ func TestSystemLANAddrs(t *testing.T) {
 func TestDefaultRouteIP(t *testing.T) {
 	if ip := defaultRouteIP(); ip != nil && ip.IsUnspecified() {
 		t.Errorf("defaultRouteIP = %v, want nil or a real address", ip)
+	}
+}
+
+// TestIsVirtualReportsVirbrBridges checks that KVM and libvirt virbr bridge interfaces
+// are recognized as virtual interfaces and ranked after physical networks.
+func TestIsVirtualReportsVirbrBridges(t *testing.T) {
+	if !isVirtual("virbr0") || !isVirtual("virbr1") {
+		t.Error("isVirtual failed to recognize virbr interface")
 	}
 }

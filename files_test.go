@@ -309,6 +309,33 @@ func TestFilesCapCountsOnlyVisible(t *testing.T) {
 	}
 }
 
+// TestFilesListingScanLimitWithHiddenFiles checks that scanLimit bounds total directory reads
+// even when most files in the folder are hidden.
+func TestFilesListingScanLimitWithHiddenFiles(t *testing.T) {
+	oldScan := scanLimit
+	oldMax := maxListing
+	scanLimit = 4
+	maxListing = 10
+	defer func() {
+		scanLimit = oldScan
+		maxListing = oldMax
+	}()
+
+	dir := t.TempDir()
+	for i := 0; i < 8; i++ {
+		must(t, os.WriteFile(filepath.Join(dir, fmt.Sprintf(".hidden%d", i)), []byte("x"), 0o644))
+	}
+	must(t, os.WriteFile(filepath.Join(dir, "v.txt"), []byte("x"), 0o644))
+
+	root, _ := os.OpenRoot(dir)
+	defer func() { _ = root.Close() }()
+
+	body := getFile(newFileServer(root, "", false), "/", nil).Body.String()
+	if !strings.Contains(body, "this folder has more") {
+		t.Errorf("expected truncated listing when scanLimit is reached:\n%s", body)
+	}
+}
+
 // TestFilesSingleModeListsItsFileInBigFolder checks that a single-file share still lists its
 // file when its folder holds far more files than the cap.
 func TestFilesSingleModeListsItsFileInBigFolder(t *testing.T) {

@@ -321,7 +321,7 @@ func serve(ctx context.Context, opts options, stdin io.Reader, stdout io.Writer)
 		defer cancel(nil)
 	}
 	served := make(chan error, 1)
-	go func() { served <- lan.Serve(ln) }()
+	go func() { served <- lan.Serve(tracker.wrap(ln)) }()
 	var tunnelStopped <-chan error // stays nil, and so never ready, when there is no tunnel
 	if tun != nil {
 		tunnelStopped = tun.done
@@ -397,7 +397,7 @@ func startPublic(ctx context.Context, cloudflared string, handler http.Handler, 
 		return nil, nil, err
 	}
 	srv := newServer(withTunnelEdge(handler), nil, tracker)
-	go func() { _ = srv.Serve(ln) }() // the error is the normal one when the server is closed
+	go func() { _ = srv.Serve(tracker.wrap(ln)) }() // the error is the normal one when the server is closed
 	tun, err := startTunnel(ctx, cloudflared, ln.Addr().String(), 30*time.Second)
 	if err != nil {
 		_ = srv.Close()

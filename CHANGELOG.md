@@ -4,6 +4,17 @@ All notable changes to yonder are listed here. The format follows [Keep a Change
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-10-25
+
+### Fixed
+- Prevent `forgetLeavers()` from expiring a pending device while the operator prompt is actively displayed.
+- Untrack hijacked WebSocket connections on close, preventing unbounded memory accumulation.
+- Bound total scanned entries in folder listings so large hidden directories do not cause unbounded reads.
+- Prevent startup hangs in WSL by adding a timeout to `wslinfo` checks.
+- Return 403 Forbidden instead of 429 when a permanently refused visitor requests access.
+- Detect KVM/libvirt bridge interfaces (`virbr*`) as virtual to avoid ranking them ahead of physical LAN interfaces.
+- Sanitize backslashes in post-auth redirect paths.
+
 ## [0.6.0] - 2026-10-24
 
 ### Added
@@ -108,7 +119,8 @@ All notable changes to yonder are listed here. The format follows [Keep a Change
 - First release: `yonder <port>` shares a local site on the network with a link and QR code. A reverse proxy rewrites `Host`, `Origin`, redirects and cookies, passes WebSockets and event streams through, and works with servers that listen only on IPv6.
 - A stable default port (shared port plus 10000), a request log, and a hint for WSL in NAT mode.
 
-[Unreleased]: https://github.com/dpologdvinity/yonder/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/dpologdvinity/yonder/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/dpologdvinity/yonder/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/dpologdvinity/yonder/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/dpologdvinity/yonder/compare/v0.4.4...v0.5.0
 [0.4.4]: https://github.com/dpologdvinity/yonder/compare/v0.4.3...v0.4.4

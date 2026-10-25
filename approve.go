@@ -53,14 +53,27 @@ type device struct {
 // deviceTable remembers every device seen during one run and queues the new ones for the
 // owner's questions. It is safe for use from many goroutines.
 type deviceTable struct {
-	mu      sync.Mutex
-	devices map[string]*device
-	pending int
-	refused map[string]bool // visitor groups (see addrGroup) the owner has refused; they cannot ask again
-	queue   []*device       // devices not yet asked about, in arrival order
-	wake    chan struct{}   // tells next() that the queue has something new
-	now     func() time.Time
+	mu             sync.Mutex
+	devices        map[string]*device
+	pending        int
+	refused        map[string]bool // visitor groups (see addrGroup) the owner has refused; they cannot ask again
+	queue          []*device       // devices not yet asked about, in arrival order
+	wake           chan struct{}   // tells next() that the queue has something new
+	activePromptID string          // id of the device currently presented to the operator in runPrompts
+	now            func() time.Time
 }
+
+// beginResult is the outcome of asking for a new device place.
+type beginResult int
+
+const (
+	// beginOK means the device was accepted and queued for approval.
+	beginOK beginResult = iota
+	// beginBusy means too many devices are already waiting.
+	beginBusy
+	// beginRefused means the visitor's address was already refused by the owner.
+	beginRefused
+)
 
 // newDeviceTable returns an empty table that tells time with the system clock.
 func newDeviceTable() *deviceTable {
@@ -74,16 +87,14 @@ func newDeviceTable() *deviceTable {
 
 // begin is beginFrom for a device whose country is not known.
 func (t *deviceTable) begin(addr, userAgent string) (string, bool) {
-	return t.beginFrom(addr, userAgent, "")
+	id, res := t.beginFrom(addr, userAgent, "")
+	return id, res == beginOK
 }
 
 // beginFrom records a new device in the pending state and queues it for the owner's question. It
-// returns the device's id, or false when too many devices are waiting, in total or from this
-// visitor (an IPv4 address, or an IPv6 /64), or when the owner has already refused a device from
-// this visitor: a refusal blocks the whole visitor for the rest of the run, so that someone with
-// the link cannot refill the waiting places with new cookies and make the owner answer again.
-// Devices that stopped waiting are forgotten first.
-func (t *deviceTable) beginFrom(addr, userAgent, country string) (string, bool) {
+// returns the device's id and beginOK, beginRefused when the visitor was already refused, or
+// beginBusy when too many devices are waiting, in total or from this visitor.
+func (t *deviceTable) beginFrom(addr, userAgent, country string) (string, beginResult) {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		host = addr
@@ -91,12 +102,12 @@ func (t *deviceTable) beginFrom(addr, userAgent, country string) (string, bool) 
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.forgetLeavers()
-	if t.pending >= maxPendingDevices {
-		return "", false
-	}
 	group := addrGroup(host)
 	if t.refused[group] {
-		return "", false
+		return "", beginRefused
+	}
+	if t.pending >= maxPendingDevices {
+		return "", beginBusy
 	}
 	fromHost := 0
 	for _, d := range t.devices {
@@ -105,7 +116,7 @@ func (t *deviceTable) beginFrom(addr, userAgent, country string) (string, bool) 
 		}
 	}
 	if fromHost >= maxPendingPerAddress {
-		return "", false
+		return "", beginBusy
 	}
 	d := &device{id: newToken(), addr: addr, host: host, group: group, country: country, userAgent: userAgent, state: devPending, lastSeen: t.now()}
 	t.devices[d.id] = d
@@ -115,15 +126,16 @@ func (t *deviceTable) beginFrom(addr, userAgent, country string) (string, bool) 
 	case t.wake <- struct{}{}:
 	default: // a wake-up is already waiting
 	}
-	return d.id, true
+	return d.id, beginOK
 }
 
 // forgetLeavers removes waiting devices that have not been seen for pendingTTL, from the table
-// and from the queue of questions. The caller must hold t.mu.
+// and from the queue of questions. Devices currently being asked about are kept until answered.
+// The caller must hold t.mu.
 func (t *deviceTable) forgetLeavers() {
 	cutoff := t.now().Add(-pendingTTL)
 	for id, d := range t.devices {
-		if d.state == devPending && d.lastSeen.Before(cutoff) {
+		if d.state == devPending && d.lastSeen.Before(cutoff) && id != t.activePromptID {
 			delete(t.devices, id)
 			t.pending--
 		}
@@ -169,6 +181,9 @@ func (t *deviceTable) waiting() int {
 func (t *deviceTable) decide(id string, allow bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if t.activePromptID == id {
+		t.activePromptID = ""
+	}
 	d, ok := t.devices[id]
 	if !ok || d.state != devPending {
 		return
@@ -190,6 +205,7 @@ func (t *deviceTable) next(ctx context.Context) *device {
 		if len(t.queue) > 0 {
 			d := t.queue[0]
 			t.queue = t.queue[1:]
+			t.activePromptID = d.id
 			t.mu.Unlock()
 			return d
 		}
