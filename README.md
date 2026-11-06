@@ -208,20 +208,20 @@ $ yonder 5173 --https
 HTTPS is on. Devices show a certificate warning until they trust yonder's certificate.
 To trust it, open this on the device and follow the steps:
   https://192.168.1.20:15173/.yonder/ca?yonder=...
-The page must show this fingerprint (SHA-256):
+Before you trust it, the certificate details on the device must show this fingerprint (SHA-256):
   A8:66:78:97:...
 ```
 
 No public certificate authority will sign a certificate for an address like `192.168.1.20`, so yonder makes its own the first time you use `--https`, and keeps it in your settings folder (`~/.config/yonder` on Linux, `~/Library/Application Support/yonder` on macOS, `%AppData%\yonder` on Windows).
 
-- **Without installing anything**, the phone shows a certificate warning. Tap through it (for example *Advanced*, then *Proceed*) and the page works, camera and clipboard included. Service workers are the exception: browsers refuse them on a page with a certificate warning.
+- **Without installing anything**, the phone shows a certificate warning. Tap through it (for example *Advanced*, then *Proceed*) and the page loads; in Chrome the camera and clipboard then work too. Service workers need the certificate installed, in every browser, and some browsers (Safari) may also refuse the WebSocket that hot reload uses until then.
 - **To get rid of the warning**, scan the second QR code on the device and follow the steps on that page (iPhone, iPad, Android and computers). Each device does this once; the certificate stays the same across runs.
-- **Check the fingerprint** on that page against the one in your terminal before you trust the certificate. Someone else on the network could try to hand your phone a different one.
-- The certificate can only vouch for private network addresses (`10.x`, `172.16-31.x`, `192.168.x` and IPv6 `fc00::/7`). Even if someone stole yonder's files from your computer, they could not use them to pretend to be a real website. The key that made the certificate is thrown away right after; only a second, limited key is kept, readable by you alone.
+- **Check the fingerprint in the device's own certificate details** (the page shows where: on iPhone under *More Details* before you tap Install, on Android under *Trusted credentials* right after) and compare it with the one in your terminal. Someone else on the network could send your phone a fake page and a different certificate; a fingerprint shown *on a page* proves nothing, which is why yonder's page does not show one. Android installs CA certificates only from a file, so its button saves the file instead of opening it.
+- The certificate can only vouch for private network addresses (`10.x`, `172.16-31.x`, `192.168.x` and IPv6 `fc00::/7`), never for a real website. The key that made it is thrown away right after; only a second, limited key is kept, readable by you alone. Know what that key allows: anyone who copies it from your computer could, on any network your devices join, impersonate **any HTTPS service at a private address** to devices that trust yonder (a router's admin page, a NAS, a printer), for up to 10 years. If that might have happened, run `yonder --remove-ca` and remove the certificate from your devices.
 - Each run makes its own short-lived certificate (30 days) with its own key that never touches the disk.
-- `yonder --ca` shows where the files are and the fingerprint. `yonder --remove-ca` deletes them; remove the certificate from your devices too (the page explains where). The next `--https` run makes a new one.
+- `yonder --ca` shows where the files are and the fingerprint. `yonder --remove-ca` deletes them; remove the certificate from your devices too (it prints where). The next `--https` run makes a new one.
 - The port only speaks HTTPS: a plain `http://` request gets an error, so use the link as printed.
-- Vite: hot reload works over HTTPS. If you set `server.hmr` options yourself, leave out `protocol` and `clientPort` so the browser connects back the way it loaded the page.
+- Vite: hot reload works over HTTPS once the device trusts the certificate. If you set `server.hmr` options yourself, leave out `protocol` and `clientPort` so the browser connects back the way it loaded the page.
 
 ## How it works
 
@@ -244,7 +244,7 @@ The link and QR code carry a secret token. Anyone without it gets a 403 and neve
 
 - `--open` turns the token off. Use it only on networks you trust.
 - Without `--https`, yonder speaks plain HTTP. On open (passwordless) Wi-Fi, or on WPA2 Wi-Fi with a shared password, others on the network can capture traffic and copy the token or cookie. Avoid sharing private data there, or use `--https` on a device that trusts yonder's certificate. Enterprise Wi-Fi with per-user logins and WPA3 protect each device's traffic.
-- `--https` keeps a certificate authority in your settings folder. It can only vouch for private addresses, and its key is readable by you alone. See [HTTPS on your network](#https-on-your-network).
+- `--https` keeps a certificate authority in your settings folder. It can only vouch for private addresses, and its key is readable by you alone; someone who copies that key could still impersonate private-address services (your router, a NAS) to devices that trust it. See [HTTPS on your network](#https-on-your-network).
 - With `--upload`, files that are served carry a sandbox policy, so a web page someone uploaded cannot run script on your computer's address. This also means an HTML site shared from an upload-enabled folder will not run its scripts.
 - Stop sharing with Ctrl-C, or share for a limited time with `--for`.
 - `--approve` makes a leaked link useless on its own: nobody gets in until you say so.
