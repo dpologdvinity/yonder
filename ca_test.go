@@ -379,8 +379,9 @@ func TestLoadOrCreateCARefusesAKeyOthersCanRead(t *testing.T) {
 	}
 }
 
-// TestServerTLSConfigReportsAFailedRenewal checks that a certificate that cannot be renewed is
-// reported once, where the owner sees it, instead of only failing every handshake in silence.
+// TestServerTLSConfigReportsAFailedRenewal checks a renewal that fails: the current certificate
+// keeps being served while it is still valid (renewal is retried on each connection), the failure
+// is reported once where the owner sees it, and only an expired certificate fails the handshake.
 func TestServerTLSConfigReportsAFailedRenewal(t *testing.T) {
 	ca := testCA(t)
 	start := time.Date(2026, 11, 7, 9, 0, 0, 0, time.UTC)
@@ -393,11 +394,18 @@ func TestServerTLSConfigReportsAFailedRenewal(t *testing.T) {
 	other, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	must(t, err)
 	ca.interKey = other // signing with a key that does not match the intermediate fails
+	clock = start
+	first, err := cfg.GetCertificate(&tls.ClientHelloInfo{})
+	must(t, err)
 	clock = start.Add(29*24*time.Hour + time.Minute)
 	for range 3 {
-		if _, err := cfg.GetCertificate(&tls.ClientHelloInfo{}); err == nil {
-			t.Fatal("renewal with the wrong key succeeded")
+		if c, err := cfg.GetCertificate(&tls.ClientHelloInfo{}); err != nil || c != first {
+			t.Fatalf("with renewal failing a day early: %v; want the current, still valid certificate", err)
 		}
+	}
+	clock = start.Add(30*24*time.Hour + time.Minute)
+	if _, err := cfg.GetCertificate(&tls.ClientHelloInfo{}); err == nil {
+		t.Fatal("an expired certificate was served")
 	}
 	if got := errOut.String(); strings.Count(got, "yonder:") != 1 || !strings.Contains(got, "renew") {
 		t.Errorf("reported %q, want one line about renewing", got)
@@ -469,6 +477,36 @@ func TestLoadOrCreateCALock(t *testing.T) {
 	must(t, os.WriteFile(lock, nil, 0o600))
 	if _, err := loadOrCreateCA(dir, time.Now()); err == nil || !strings.Contains(err.Error(), lock) {
 		t.Errorf("err = %v, want a timeout that names %s", err, lock)
+	}
+}
+
+// TestLoadOrCreateCAReadsAFolderItCannotWrite checks that an authority in a folder yonder may
+// not write to (managed by another tool, say) is still used: the lock is for creating one.
+func TestLoadOrCreateCAReadsAFolderItCannotWrite(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs Unix permissions that apply to this user")
+	}
+	dir := t.TempDir()
+	made, err := loadOrCreateCA(dir, time.Now())
+	must(t, err)
+	must(t, os.Chmod(dir, 0o500))
+	defer func() { _ = os.Chmod(dir, 0o700) }()
+	ca, err := loadOrCreateCA(dir, time.Now())
+	if err != nil || !ca.root.Equal(made.root) || ca.fresh {
+		t.Errorf("read-only folder: %v; want the authority in it", err)
+	}
+	if _, err := loadOrCreateCA(dir, made.inter.NotAfter); err == nil {
+		t.Error("an authority that needs renewing in a read-only folder was accepted")
+	}
+}
+
+// TestCAPageWindowsSteps checks that Windows users are told how to see a SHA-256 fingerprint:
+// the certificate dialog shows only a SHA-1 thumbprint.
+func TestCAPageWindowsSteps(t *testing.T) {
+	rec := httptest.NewRecorder()
+	withCAPages(http.NotFoundHandler(), testCA(t)).ServeHTTP(rec, httptest.NewRequest("GET", "/.yonder/ca", nil))
+	if !strings.Contains(rec.Body.String(), "certutil -hashfile yonder-ca.crt SHA256") || strings.Contains(rec.Body.String(), "Details tab") {
+		t.Error("the page does not give Windows users a SHA-256 command")
 	}
 }
 

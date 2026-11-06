@@ -207,7 +207,8 @@ func (ca *certAuthority) leaf(ips []net.IP, now time.Time) (tls.Certificate, err
 // leafRenewBefore before it ends (a run without --for can outlast it), TLS 1.2 or newer, and
 // HTTP/1.1 only. HTTP/2 would carry WebSockets differently, and yonder passes them to the app by
 // taking over an HTTP/1.1 connection, which it also tracks to close on exit. A renewal that
-// fails is reported once on errOut; the server's own log drops handshake errors.
+// fails is reported once on errOut (the server's own log drops handshake errors) and retried on
+// the next connection; the current certificate is served until it expires.
 func (ca *certAuthority) serverConfig(ips []net.IP, now func() time.Time, errOut io.Writer) (*tls.Config, error) {
 	first, err := ca.leaf(ips, now())
 	if err != nil {
@@ -224,14 +225,16 @@ func (ca *certAuthority) serverConfig(ips []net.IP, now func() time.Time, errOut
 			defer mu.Unlock()
 			if t := now(); t.Add(leafRenewBefore).After(current.Leaf.NotAfter) {
 				next, err := ca.leaf(ips, t)
-				if err != nil {
-					if !reported {
-						reported = true
-						say(errOut, "yonder: could not renew the https certificate, so devices cannot connect: %v\n", err)
-					}
-					return nil, err
+				switch {
+				case err == nil:
+					current = &next
+				case !reported:
+					reported = true
+					say(errOut, "yonder: could not renew the https certificate (devices can connect until %s): %v\n", current.Leaf.NotAfter.Local().Format("Mon 2 Jan 15:04"), err)
 				}
-				current = &next
+				if err != nil && !t.Before(current.Leaf.NotAfter) {
+					return nil, err // expired: no device would accept it
+				}
 			}
 			return current, nil
 		},
@@ -257,6 +260,12 @@ func loadOrCreateCA(dir string, now time.Time) (*certAuthority, error) {
 		return nil, fmt.Errorf("creating the folder for yonder's certificate: %w", err)
 	}
 	unlock, err := lockFolder(dir)
+	if errors.Is(err, fs.ErrPermission) {
+		// A folder yonder may not write to (managed by another tool) can still hold a usable one.
+		if ca, loadErr := loadCA(dir); loadErr == nil && !needsRenewal(ca, now) {
+			return ca, nil
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -267,7 +276,7 @@ func loadOrCreateCA(dir string, now time.Time) (*certAuthority, error) {
 		// None yet: make one.
 	case err != nil:
 		return nil, fmt.Errorf("%w (yonder --remove-ca deletes the files, and the next --https run makes new ones)", err)
-	case now.Add(leafLife).After(ca.inter.NotAfter) || now.Add(leafLife).After(ca.root.NotAfter):
+	case needsRenewal(ca, now):
 		// Too close to the end: replace it.
 	default:
 		return ca, nil
@@ -280,6 +289,11 @@ func loadOrCreateCA(dir string, now time.Time) (*certAuthority, error) {
 	}
 	ca.dir, ca.fresh = dir, true
 	return ca, nil
+}
+
+// needsRenewal reports whether ca would expire before a certificate made now does.
+func needsRenewal(ca *certAuthority, now time.Time) bool {
+	return now.Add(leafLife).After(ca.inter.NotAfter) || now.Add(leafLife).After(ca.root.NotAfter)
 }
 
 // lockFolder takes the lock in dir, waiting up to lockWait for another run to release it, and
@@ -499,7 +513,7 @@ const caPageHTML = `<!doctype html><html><head><meta charset="utf-8"><meta name=
 <p><a href="%s" style="display:inline-block;padding:.6rem 1rem;background:#2563eb;color:#fff;border-radius:.4rem;text-decoration:none">Save the certificate file</a></p>
 <ol><li>Tap Save. The file <i>yonder-ca.crt</i> goes to Downloads.</li><li>Open Settings and search for <i>CA certificate</i> (usually Security &gt; More security settings &gt; Encryption &amp; credentials &gt; Install a certificate &gt; CA certificate). Choose <i>Install anyway</i> and pick the file.</li><li>Then open Encryption &amp; credentials &gt; Trusted credentials &gt; User, tap the yonder certificate, and compare its SHA-256 fingerprint with the terminal. If it differs, remove it.</li><li>Chrome trusts it at once; Firefox needs <i>Use third party CA certificates</i> turned on in its secret settings.</li></ol>
 <h2>Computers</h2>
-<p>Save the file with the Android button, compare its fingerprint (on a Mac, Keychain Access shows it; on Windows, the certificate's Details tab), then trust it for websites: on a Mac, set it to Always Trust in Keychain Access; on Windows, install it into <i>Trusted Root Certification Authorities</i>.</p>
+<p>Save the file with the Android button, compare its fingerprint (on a Mac, Keychain Access shows it; on Windows, run <code>certutil -hashfile yonder-ca.crt SHA256</code> in the Downloads folder, which prints the same digits without colons), then trust it for websites: on a Mac, set it to Always Trust in Keychain Access; on Windows, install it into <i>Trusted Root Certification Authorities</i>.</p>
 <h2>To undo</h2>
 <p>Remove the profile (iPhone: Settings &gt; General &gt; VPN &amp; Device Management) or the certificate (Android: Encryption &amp; credentials &gt; User credentials). On the computer, <code>yonder --remove-ca</code> deletes yonder's copy.</p>
 </body></html>`
