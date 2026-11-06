@@ -25,7 +25,7 @@ yonder makes one thing on your computer reachable from other devices on the same
 
 It prints a link and a QR code. By default the link contains a secret token, and nothing is served to a request that does not carry it.
 
-Everything runs inside one process. There is no daemon, no configuration file, no account and no server run by the project: the other device only needs a web browser.
+Everything runs inside one process. There is no daemon, no configuration file, no account and no server run by the project: the other device only needs a web browser. The only state yonder keeps between runs is the certificate authority that `--https` creates on first use (see [HTTPS on the network](#https-on-the-network-cago)).
 
 ## 2. Technology
 
@@ -51,6 +51,7 @@ All code is in one Go package, `main`, at the repository root. One file has one 
 | `auth.go` | The access gate `withAuth` and `withAuthDevices`, token creation, and the helpers that remove the token and cookie before a request moves on. |
 | `approve.go` | Device approval for `--approve`: the table of devices, the questions asked at the terminal, and the description of a browser shown to the owner. |
 | `tunnel.go` | `--public`: finds `cloudflared`, starts it, and waits until the tunnel is registered. |
+| `ca.go` | `--https`: yonder's certificate authority (create, save, load, renew), each run's certificate and TLS settings, and the pages that hand the certificate to a phone. |
 | `edge.go` | Which headers to believe: the tunnel port trusts Cloudflare's visitor address and country; every other port strips them. |
 | `proxy.go` | The reverse proxy `newProxy`, the request log `withLog`, and the "device connected" notice. |
 | `files.go` | The file server `newFileServer`: listing page, downloads, and the rules about what may be served. |
@@ -94,9 +95,9 @@ parseArgs ──▶ choose what to share ──▶ find a network address ──
 3. **Terminal.** With `--approve`, yonder checks that standard input is a real terminal and that yonder is in the foreground of it, because the owner's answers come from it.
 4. **Address.** `systemLANAddrs` lists private IPv4 addresses. The one the operating system would use to reach the internet comes first; container, VM and VPN addresses go last. If there are none, `noAddrError` explains why.
 5. **Public port.** `listen` opens `0.0.0.0:<port>`. The default is the shared port plus 10000, so the link stays the same across restarts; if that is taken, the operating system picks a free port.
-6. **Handler chain.** See the next section. With `--approve`, a `deviceTable` is created and a goroutine starts asking the owner about each new device.
-7. **Output.** The link, the QR code, the access warning, the uploads and time-limit lines and, on WSL in NAT mode, the fix.
-8. **Serving.** `http.Server` runs with a header timeout (against slow-connection attacks) and an idle timeout. There is deliberately no write timeout, because WebSockets and event streams are long-lived.
+6. **Handler chain.** See the next section. With `--https`, `startHTTPS` loads or creates the certificate authority before the port opens, signs a certificate for the addresses from step 4, and the certificate pages are added in front of what is shared. With `--approve`, a `deviceTable` is created and a goroutine starts asking the owner about each new device.
+7. **Output.** The link, the QR code, the access warning, the uploads and time-limit lines, with `--https` the certificate page's link and QR code and the fingerprint to compare in the device's certificate details, and, on WSL in NAT mode, the fix.
+8. **Serving.** With `--https`, the network listener is wrapped in `tls.NewListener`. `http.Server` runs with a header timeout (against slow-connection attacks) and an idle timeout. There is deliberately no write timeout, because WebSockets and event streams are long-lived.
 9. **Shutdown.** On Ctrl-C, terminate or hang-up, or when the `--for` time is up (`expireAt` ends the serving context), `run` calls `Server.Close`, closes every WebSocket connection (`Server.Close` leaves those open), then waits up to three seconds for running uploads to remove their temporary files, and exits with code 0. `Close` is used instead of `Shutdown` because `Shutdown` waits for hijacked WebSocket connections that may never end.
 
 ## 5. How a request travels
@@ -111,6 +112,9 @@ parseArgs ──▶ choose what to share ──▶ find a network address ──
                     │        ▼                                                         │
                     │   withAuth   (skipped with --open)                               │
                     │        │  no token: 403, and the request stops here              │
+                    │        ▼                                                         │
+                    │   withCAPages (--https only): /.yonder/ca and /.yonder/ca.crt    │
+                    │        │                                                         │
                     │        ▼                                                         │
                     │   ┌── newProxy ──▶ your dev server on localhost                  │
                     │   └── newFileServer ──▶ the shared folder (read; or write)       │
@@ -127,7 +131,7 @@ A `POST` that carries the token is not redirected, because a redirect would lose
 
 **Every later request** has the cookie. `withAuth` accepts it, removes the `yonder` query parameter and every `yonder_<digits>` cookie, and passes the rest of the request on byte for byte. The app never sees yonder's token.
 
-**In the proxy**, `newProxy` rewrites the request so the dev server believes it came from `localhost`: `Host` becomes `localhost:<port>`, and an `Origin` that matches the visitor's address becomes `http://localhost:<port>`. On the way back it points redirects that name localhost at the address the visitor used, and removes `Domain=localhost` from cookies, which browsers reject on an IP address. WebSockets and event streams pass through. If the dev server is down, the visitor gets a `502` with a plain message, and the next request works once it is back.
+**In the proxy**, `newProxy` rewrites the request so the dev server believes it came from `localhost`: `Host` becomes `localhost:<port>`, and an `Origin` that matches the visitor's address and scheme (`https` with `--https` or through the tunnel) becomes `http://localhost:<port>`. On the way back it points redirects that name localhost at the address the visitor used, and removes `Domain=localhost` from cookies, which browsers reject on an IP address. WebSockets and event streams pass through. If the dev server is down, the visitor gets a `502` with a plain message, and the next request works once it is back.
 
 **In the file server**, a request path becomes a folder-relative name through `safeRel`, which rejects hidden names (starting with a dot), backslashes, and on Windows `:` and `~`. Every segment is then checked with `Lstat`: only plain folders and regular files are allowed, so symbolic links, junctions, pipes and devices are never followed. A folder produces the HTML listing; a file goes to `http.ServeContent`, which handles content types and range requests.
 
@@ -190,6 +194,18 @@ Only the tunnel listener (`withTunnelEdge`) believes `CF-Connecting-IP` and `CF-
 
 A refusal in `--approve` blocks the visitor group (an IPv4 address or an IPv6 /64) for the rest of the run, so a holder of the link cannot refill the waiting places with new cookies. A request with no `CF-Connecting-IP` keeps the loopback address, so those visitors share one group; Cloudflare always sends the header, so this only matters if something else connects to the tunnel port.
 
+### HTTPS on the network (`ca.go`)
+
+Browsers treat `http://192.168.x.x` as insecure, so the camera, clipboard, service workers and `crypto.subtle` do not work there. No public certificate authority signs for private addresses, so `--https` uses yonder's own, kept in `os.UserConfigDir()/yonder/`:
+
+- On first use, `newCA` creates a root (ECDSA P-256, path length 1) and uses it once to sign an **intermediate**. The root key is then dropped and never written; only `ca.crt` (the root certificate, which devices install), `intermediate.crt` and `intermediate.key` are saved, through a temporary file and a rename, in a folder with mode `0700` and a key with mode `0600`. `loadCA` refuses a key that other users can read, files that are missing in part, damaged, or do not belong together, and points at `--remove-ca` rather than replacing them silently, since the owner's devices trust the old root.
+- The intermediate has path length 0, extended key usage `serverAuth`, and **critical name constraints**: IP addresses in `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` and `fc00::/7`, and DNS names under `invalid` only. A device that trusts the root therefore trusts nothing else it might sign: no public address and no real website name, even if the intermediate key is stolen. The limit is the private ranges, not this network's: a stolen intermediate key could still impersonate a router or NAS at a private address to devices that trust the root, which SECURITY.md lists.
+- Each run's certificate (`leaf`) has a fresh key in memory, the served addresses as IP entries, no common name, key usage `digitalSignature`, `serverAuth`, a 128-bit random serial, and validity from an hour before start (phone clocks drift) for 30 days. The server sends it with the intermediate. `serverConfig` replaces it a day before it ends, for runs without `--for`. The authority itself is replaced when it would expire before a new 30-day certificate does, and the banner then says it is new.
+- TLS 1.2 or newer, and HTTP/1.1 only: WebSockets reach the app by taking over an HTTP/1.1 connection, which `connTracker` also closes on exit (it unwraps the `tls.Conn` to find the tracked connection). Plain HTTP on the port gets Go's `400` reply. Handshake failures, which every device that has not installed the root causes, are dropped from the server's error log (`quietHandshakes`).
+- `withCAPages` sits behind the access gate and serves `/.yonder/ca` (steps for iPhone, Android and computers) and `/.yonder/ca.crt` (the root as DER: `application/x-x509-ca-cert`, which iPhones offer to install, or with `?save` as a plain attachment, because Android installs CA certificates only from a file). Hidden names are never served from a shared folder, so these paths cannot collide with a shared file.
+- Creating the authority holds a lock file (`.lock`, `O_EXCL`) in the folder, so two first runs at once share one authority; a lock older than a minute is left over from a crash and taken over. Through the `--public` tunnel the certificate pages do not exist (`fromTunnel`): the certificate is for this network only. A failed renewal is printed once, since the error log drops handshake errors; the current certificate is served until it expires and renewal is retried on each connection. A folder yonder cannot write to (so cannot lock) is still used if it holds a valid authority. Two runs that take over the same stale lock at the same millisecond, after a crash, could both hold it; an operating-system lock would close that, at the cost of separate code per system.
+- `requestIsSecure` is true for TLS requests, so the access cookie is `Secure`, and the proxy treats an `https://` Origin as same-site and keeps redirects on `https`.
+
 ### Network address (`lan.go`, `port.go`, `target.go`, `wsl.go`)
 
 - `lanAddrs` keeps only private IPv4 addresses on interfaces that are up and not loopback, removes duplicates, and ranks them: the address of the default route first (unless its interface is virtual), then ordinary interfaces, then Docker, VM, VPN and point-to-point interfaces. Interface names are matched case-insensitively and include Windows names such as "vEthernet" and "OpenVPN TAP-Windows6".
@@ -208,6 +224,9 @@ yonder exposes part of your computer to a network. The design assumes that **oth
 | A device that has the link, when you used `--approve` | Get in before you allow it | A new device waits on a page until you answer at the terminal; the app never sees its requests. A refusal is final until restart. |
 | A device that has the link | Read anything outside what you shared | The proxy forwards only to the one port. The file server uses `os.Root`, refuses links, special files and hidden names. |
 | Someone who sees the link in a screenshot or terminal log | Learn the token from the log | The log redacts it. The address bar and `Referer` lose it after the first redirect. |
+| A device on the network, with `--https` | Read or change traffic | TLS with a certificate the device checks against yonder's root. A device that has not installed the root sees a warning; if its user clicks through, the connection is encrypted but not authenticated. |
+| A device on the network, with `--https` | Hand a phone its own certificate instead of yonder's | The certificate page sits behind the token, and the person compares the SHA-256 fingerprint in the device's own certificate details with the terminal. The page shows no fingerprint, because a fake page over the unchecked connection could show the real one. |
+| Someone who steals `intermediate.key` | Impersonate a real website or a public address to devices that trust yonder | Critical name constraints limit the intermediate to private addresses and the `invalid` domain; the root key that could sign another intermediate no longer exists. What remains possible: impersonating any service at a private address (a router, a NAS) to those devices, until the owner runs `--remove-ca` and removes the root from them. |
 | A device on the network, with `--public` | Pretend to be another visitor by sending `CF-Connecting-IP` or `X-Forwarded-For` | The network listener strips every proxy header before anything reads it; only the loopback tunnel listener believes Cloudflare's headers. |
 | A website open in a browser on the network | Make the browser post into your folder or your app | Uploads check `Origin` and `Sec-Fetch-Site`. The cookie is `SameSite=Lax`. Redirects stay on the same site. |
 | A file someone uploaded | Run script on yonder's address, or hide its real type | Served files get `nosniff` and a sandbox policy; names with control or bidi characters are refused. |
@@ -219,7 +238,7 @@ yonder exposes part of your computer to a network. The design assumes that **oth
 
 **Not protected:**
 
-- **The network.** yonder speaks plain HTTP. On open Wi-Fi, or WPA2 Wi-Fi with a shared password, someone who captures traffic can read it and copy the token or cookie. `--open` removes the token altogether.
+- **The network, without `--https`.** yonder speaks plain HTTP. On open Wi-Fi, or WPA2 Wi-Fi with a shared password, someone who captures traffic can read it and copy the token or cookie. `--open` removes the token altogether.
 - **Cookies across ports.** Browsers send cookies to every port of an address. Another web service on the same IP receives `yonder_<port>` cookies.
 - **A hostile app.** The proxy forwards whatever your app serves to whoever has the link. It does not make your app safe.
 - **A hostile local user.** Someone who can already run programs on your computer can read the shared files directly.
@@ -244,6 +263,10 @@ Each control above has a test. [SECURITY.md](SECURITY.md) explains how to report
 
 **Only private addresses on the network port.** Putting a development site on a public address by accident is worse than an error message, so yonder refuses. `--public` does not change this: it adds a tunnel, which is a deliberate, visible choice with a time limit and approval on by default, and leaves the network port private.
 
+**An own certificate authority for `--https`, limited by name constraints.** The alternatives were worse: a self-signed certificate per run would show a warning every time and can never be installed for good; a public certificate needs a domain name and DNS that points at a private address; mkcert-style roots without limits can vouch for any website if their key leaks. The cost is the first persistent state in yonder (the settings folder), and a one-time install per device.
+
+**`--ca` and `--remove-ca` instead of a `yonder ca` command.** `yonder ca` already means "share the folder `ca`"; a flag keeps that working.
+
 **Cloudflare quick tunnel through an external `cloudflared`.** It needs no account or domain and yonder keeps no credentials. yonder never downloads cloudflared, so the user decides to trust it. The cost: Cloudflare reads the traffic, and the tunnel has no uptime promise.
 
 **Standard library first.** One dependency (the QR drawer) keeps the supply chain small and the binary static.
@@ -258,6 +281,7 @@ Run everything with `go test ./...`. Tests are written first for new behaviour, 
 |---|---|---|
 | Unit | most `*_test.go` | Pure functions and handlers, using `httptest` and temporary folders: the gate, header rewriting, listings, name rules, address ranking. |
 | In-process | `main_test.go` | `run` with a cancelled context: the banner, exit codes and error messages. |
+| Certificates | `ca_test.go`, `https_test.go` | Every field of the root, intermediate and run certificate; `x509.Verify` with the root as the only anchor (private addresses pass, public addresses and real names fail); file modes, damaged files, renewal; and `--https` in process with a client that trusts only the root: the full chain, `Secure` cookies, the certificate pages, plain HTTP, WebSockets, `Origin` and redirects over TLS. |
 | End to end | `e2e_test.go` | The compiled binary against real servers: links, cookies, uploads, and Ctrl-C, terminate and hang-up during an upload. |
 | Browser script | `upload_script_test.go` | The upload page's inline script, run in Node.js (skipped if Node is missing). |
 | Documentation | `doccheck_test.go` | Every Go file has a header comment, and every declaration a doc comment that starts with its name. |
@@ -304,6 +328,6 @@ Lint and static checks: `gofmt`, `go vet` (also for Windows and macOS), `golangc
 | Change how requests reach a dev server | `newProxy` in `proxy.go` |
 | Change the listing page | `listingTmpl` in `files.go` (its script is tested in `upload_script_test.go`) |
 | Change the address shown in the QR code | `lanAddrs` and `isVirtual` in `lan.go` |
+| Change the certificates of `--https` | `newCA`, `leaf` and `serverConfig` in `ca.go` (every field is checked in `ca_test.go`) |
 | Add an install channel | A new job or repository that downloads the release, and a section in this document and the README |
 
-Features that are planned but not built: HTTPS on the local network. It would sit in the handler chain in section 5 and would need its own threat analysis in section 7.

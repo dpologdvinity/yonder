@@ -45,6 +45,13 @@ python3 -m http.server 8000 --bind 127.0.0.1 &   # any site on a port
 go run . 8000
 ```
 
+To try `--https` without touching your real settings folder, point it somewhere else (on Linux and other Unix systems; macOS and Windows ignore `XDG_CONFIG_HOME`):
+
+```sh
+XDG_CONFIG_HOME=/tmp/yonder-config go run . /tmp/demo --https
+curl --cacert /tmp/yonder-config/yonder/ca.crt "<the https link>"
+```
+
 Never share your home directory while testing. See the README's [Firewalls](README.md#firewalls) and [WSL](README.md#wsl) sections if a phone cannot connect.
 
 ## Run the checks

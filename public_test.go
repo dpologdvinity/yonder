@@ -293,37 +293,7 @@ func TestStartTunnelReportsACrash(t *testing.T) {
 func publicRun(t *testing.T, behavior string, args ...string) (banner string, stop func() int, output func() string) {
 	t.Helper()
 	installFakeCloudflared(t, behavior)
-	var out, errOut syncBuf
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan int, 1)
-	go func() { done <- run(args, strings.NewReader(""), &out, &errOut, ctx) }()
-	deadline := time.Now().Add(15 * time.Second)
-	for !strings.Contains(out.String(), "can read it") {
-		select {
-		case code := <-done:
-			cancel()
-			if strings.Contains(errOut.String(), "no network connection") || strings.Contains(errOut.String(), "public address") {
-				t.Skip("no private network address on this machine")
-			}
-			t.Fatalf("yonder exited early with %d: %s", code, errOut.String())
-		default:
-		}
-		if time.Now().After(deadline) {
-			cancel()
-			t.Fatalf("no banner; stdout %q stderr %q", out.String(), errOut.String())
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	return out.String(), func() int {
-		cancel()
-		select {
-		case code := <-done:
-			return code
-		case <-time.After(10 * time.Second):
-			t.Fatal("yonder did not stop")
-			return -1
-		}
-	}, out.String
+	return startRun(t, "can read it", args...)
 }
 
 // TestPublicEndToEnd checks the whole --public path with the stand-in cloudflared: the banner

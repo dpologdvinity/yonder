@@ -22,7 +22,7 @@ yonder lets you open a website running on your own computer (`localhost`) from y
 
 ![yonder demo](docs/demo.gif)
 
-**Contents:** [Install](#install) · [Quick start](#quick-start) · [Usage](#usage) · [Share files](#share-files) · [How it works](#how-it-works) · [Is it safe?](#is-it-safe) · [Known limitations](#known-limitations) · [Firewalls](#firewalls) · [WSL](#wsl) · [Documentation](#documentation)
+**Contents:** [Install](#install) · [Quick start](#quick-start) · [Usage](#usage) · [Share files](#share-files) · [Share over the internet](#share-over-the-internet) · [HTTPS on your network](#https-on-your-network) · [How it works](#how-it-works) · [Is it safe?](#is-it-safe) · [Known limitations](#known-limitations) · [Firewalls](#firewalls) · [WSL](#wsl) · [Documentation](#documentation)
 
 ## Install
 
@@ -109,7 +109,10 @@ yonder <target> --open      share without the secret token (trusted networks onl
 yonder <target> --for 30m   stop sharing after 30 minutes (also 2h, 1d; at most 7d)
 yonder <target> --approve   allow each new device yourself, at the terminal
 yonder <target> --public    share over the internet (needs cloudflared)
+yonder <target> --https     use HTTPS on your network (camera, clipboard, service workers)
 yonder <target> --listen N  use N as the public port
+yonder --ca                 show where yonder's certificate is kept, and its fingerprint
+yonder --remove-ca          delete yonder's certificate
 yonder --version            print the version
 ```
 
@@ -120,6 +123,8 @@ yonder --version            print the version
 | `--approve` | Asks you at the terminal before each new device is let in. See [Approve each device](#approve-each-device). Needs the token, so it cannot be combined with `--open`. |
 | `--public` | Also shares over the internet through a Cloudflare quick tunnel. See [Share over the internet](#share-over-the-internet). Sets `--for 1h` and `--approve` unless you choose otherwise. Cannot be combined with `--open`. |
 | `--no-approve` | With `--public`: let anyone with the link in without asking you. |
+| `--https` | Serves the link on your network over HTTPS, with a certificate yonder makes for itself. See [HTTPS on your network](#https-on-your-network). Works with every other option. |
+| `--ca`, `--remove-ca` | Show where yonder's certificate is kept and its fingerprint, or delete it. They work alone, without a port or path. |
 | `--open` | Turns the secret token off. Anyone on the network can open the link. |
 | `--upload` | Lets other devices send files into a shared folder. Folders only. |
 | `--version`, `--help` | Print the version, or the usage text. |
@@ -192,6 +197,32 @@ Know the limits:
 - People who come through the tunnel do not get a "device connected" line; their requests appear in the log with their real address.
 - If yonder is killed without a chance to clean up (`kill -9`, a crash of the computer), `cloudflared` may keep running with nothing behind it. It serves nothing, but you can stop it with `pkill cloudflared`.
 
+## HTTPS on your network
+
+Browsers only allow the camera, the microphone, the clipboard, service workers and `crypto.subtle` on secure pages. `http://localhost` counts as secure on your computer, but `http://192.168.1.20` on the phone does not. `--https` fixes this:
+
+```
+$ yonder 5173 --https
+  https://192.168.1.20:15173/?yonder=...
+
+HTTPS is on. Devices show a certificate warning until they trust yonder's certificate.
+To trust it, open this on the device and follow the steps:
+  https://192.168.1.20:15173/.yonder/ca?yonder=...
+Before you trust it, the certificate details on the device must show this fingerprint (SHA-256):
+  A8:66:78:97:...
+```
+
+No public certificate authority will sign a certificate for an address like `192.168.1.20`, so yonder makes its own the first time you use `--https`, and keeps it in your settings folder (`~/.config/yonder` on Linux, `~/Library/Application Support/yonder` on macOS, `%AppData%\yonder` on Windows).
+
+- **Without installing anything**, the phone shows a certificate warning. Tap through it (for example *Advanced*, then *Proceed*) and the page loads; in Chrome the camera and clipboard then work too. Service workers need the certificate installed, in every browser, and some browsers (Safari) may also refuse the WebSocket that hot reload uses until then.
+- **To get rid of the warning**, scan the second QR code on the device and follow the steps on that page (iPhone, iPad, Android and computers). Each device does this once; the certificate stays the same across runs.
+- **Check the fingerprint in the device's own certificate details** (the page shows where: on iPhone under *More Details* before you tap Install, on Android under *Trusted credentials* right after) and compare it with the one in your terminal. Someone else on the network could send your phone a fake page and a different certificate; a fingerprint shown *on a page* proves nothing, which is why yonder's page does not show one. Android installs CA certificates only from a file, so its button saves the file instead of opening it.
+- The certificate can only vouch for private network addresses (`10.x`, `172.16-31.x`, `192.168.x` and IPv6 `fc00::/7`), never for a real website. The key that made it is thrown away right after; only a second, limited key is kept, readable by you alone. Know what that key allows: anyone who copies it from your computer could, on any network your devices join, impersonate **any HTTPS service at a private address** to devices that trust yonder (a router's admin page, a NAS, a printer), for up to 10 years. If that might have happened, run `yonder --remove-ca` and remove the certificate from your devices.
+- Each run makes its own short-lived certificate (30 days) with its own key that never touches the disk.
+- `yonder --ca` shows where the files are and the fingerprint. `yonder --remove-ca` deletes them; remove the certificate from your devices too (it prints where). The next `--https` run makes a new one.
+- The port only speaks HTTPS: a plain `http://` request gets an error, so use the link as printed.
+- Vite: hot reload works over HTTPS once the device trusts the certificate. If you set `server.hmr` options yourself, leave out `protocol` and `clientPort` so the browser connects back the way it loaded the page.
+
 ## How it works
 
 yonder is one program with no dependencies on the other device. It opens a server on all of your network interfaces and puts two things in front of what you share: the access gate and a request log.
@@ -212,7 +243,8 @@ phone ──▶ your computer, port 13000 ──▶ log ──▶ access gate �
 The link and QR code carry a secret token. Anyone without it gets a 403 and never reaches your app. The first visit swaps the token for a cookie, so it disappears from the address bar. Every restart makes a new token, which cuts off old links. Only the one port, file or folder you name is shared.
 
 - `--open` turns the token off. Use it only on networks you trust.
-- yonder speaks plain HTTP. On open (passwordless) Wi-Fi, or on WPA2 Wi-Fi with a shared password, others on the network can capture traffic and copy the token or cookie. Avoid sharing private data there. Enterprise Wi-Fi with per-user logins and WPA3 protect each device's traffic.
+- Without `--https`, yonder speaks plain HTTP. On open (passwordless) Wi-Fi, or on WPA2 Wi-Fi with a shared password, others on the network can capture traffic and copy the token or cookie. Avoid sharing private data there, or use `--https` on a device that trusts yonder's certificate. Enterprise Wi-Fi with per-user logins and WPA3 protect each device's traffic.
+- `--https` keeps a certificate authority in your settings folder. It can only vouch for private addresses, and its key is readable by you alone; someone who copies that key could still impersonate private-address services (your router, a NAS) to devices that trust it. See [HTTPS on your network](#https-on-your-network).
 - With `--upload`, files that are served carry a sandbox policy, so a web page someone uploaded cannot run script on your computer's address. This also means an HTML site shared from an upload-enabled folder will not run its scripts.
 - Stop sharing with Ctrl-C, or share for a limited time with `--for`.
 - `--approve` makes a leaked link useless on its own: nobody gets in until you say so.
@@ -224,7 +256,7 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 - Your app's own code may hardcode `localhost`. A frontend calling an API at `http://localhost:8080` fails on the phone, because there `localhost` is the phone. Use relative API URLs or your dev server's proxy.
 - Response bodies are not rewritten. Absolute `http://localhost:<port>` links inside HTML or JS stay broken.
-- `http://localhost` counts as a secure context; `http://192.168.x.x` does not. Service workers, camera, geolocation, clipboard and `crypto.subtle` do not work on the other device yet.
+- `http://localhost` counts as a secure context; `http://192.168.x.x` does not. Service workers, camera, geolocation, clipboard and `crypto.subtle` need [`--https`](#https-on-your-network) on the other device.
 - Guest, campus and café networks sometimes block device-to-device traffic. If the other device cannot connect, try a phone hotspot.
 - The link on your network only works on private networks (`10.x`, `172.16-31.x`, `192.168.x`). Some networks give every computer a public address; there yonder stops with a message instead of putting your site on the internet. Only `--public` shares beyond your network, and only through its tunnel.
 - Cookies do not include the port, so another web service on the same IP address receives yonder's cookie.
