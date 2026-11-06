@@ -9,17 +9,24 @@
 //	yonder <folder> --upload    also accept files sent from other devices
 //	yonder <target> --open      share without the secret token (trusted networks only)
 //	yonder <target> --listen N  use N as the public port
+//	yonder <target> --https     serve over HTTPS with yonder's own certificate
+//	yonder --ca                 show where that certificate is kept, and its fingerprint
+//	yonder --remove-ca          delete that certificate
 //	yonder --version            print the version
 //
 // See README.md for how to use it and ARCHITECTURE.md for how it works.
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -65,10 +72,10 @@ func versionFromBuildInfo(current, module string) string {
 
 // usage is the help text. It is printed to stdout for --help and to stderr, after the reason,
 // when the arguments are wrong.
-const usage = "usage: yonder <port|path> [--listen N] [--open] [--upload] [--for TIME] [--approve] [--public] [--no-approve]\n       yonder --version\n"
+const usage = "usage: yonder <port|path> [--listen N] [--open] [--upload] [--for TIME] [--approve] [--public] [--no-approve] [--https]\n       yonder --ca | --remove-ca | --version\n"
 
 // options holds the parsed command line. Exactly one of port and path is set, unless
-// showVersion is true.
+// showVersion, showCA or removeCA is true.
 type options struct {
 	port, listenPort  int
 	path              string // set instead of port when sharing files
@@ -78,6 +85,8 @@ type options struct {
 	approve           bool          // the owner must allow each new device at the terminal
 	public            bool          // also share over the internet through a Cloudflare tunnel
 	noApprove         bool          // with public: do not ask before letting a device in
+	https             bool          // serve the network link over HTTPS with yonder's own certificate
+	showCA, removeCA  bool          // show or delete that certificate instead of sharing
 }
 
 // main runs yonder until it receives an interrupt, terminate or hang-up signal, then exits with
@@ -100,6 +109,9 @@ func parseArgs(args []string) (options, error) {
 	fs.BoolVar(&o.approve, "approve", false, "")
 	fs.BoolVar(&o.public, "public", false, "")
 	fs.BoolVar(&o.noApprove, "no-approve", false, "")
+	fs.BoolVar(&o.https, "https", false, "")
+	fs.BoolVar(&o.showCA, "ca", false, "")
+	fs.BoolVar(&o.removeCA, "remove-ca", false, "")
 	fs.BoolVar(&o.showVersion, "version", false, "")
 	forText := fs.String("for", "", "")
 	if err := fs.Parse(args); err != nil {
@@ -107,6 +119,13 @@ func parseArgs(args []string) (options, error) {
 	}
 	if o.showVersion {
 		return options{showVersion: true}, nil
+	}
+	errCAAlone := errors.New("--ca and --remove-ca work alone, without a port, a path or another option")
+	if o.showCA || o.removeCA {
+		if fs.NFlag() != 1 || fs.NArg() != 0 {
+			return options{}, errCAAlone
+		}
+		return options{showCA: o.showCA, removeCA: o.removeCA}, nil
 	}
 	if fs.NArg() == 0 {
 		return options{}, errors.New("missing port")
@@ -129,6 +148,9 @@ func parseArgs(args []string) (options, error) {
 	}
 	if fs.NArg() > 0 {
 		return options{}, fmt.Errorf("unexpected argument %q", fs.Arg(0))
+	}
+	if o.showCA || o.removeCA {
+		return options{}, errCAAlone
 	}
 	if o.upload && o.path == "" {
 		return options{}, errors.New("--upload needs a folder")
@@ -221,6 +243,13 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, ctx context.C
 		say(stdout, "yonder %s\n", version)
 		return 0
 	}
+	if opts.showCA || opts.removeCA {
+		if err := caCommand(opts.removeCA, stdout); err != nil {
+			say(stderr, "yonder: %v\n", err)
+			return 1
+		}
+		return 0
+	}
 	if err := serve(ctx, opts, stdin, stdout); err != nil {
 		say(stderr, "yonder: %v\n", err)
 		return 1
@@ -290,6 +319,14 @@ func serve(ctx context.Context, opts options, stdin io.Reader, stdout io.Writer)
 	if len(addrs) == 0 {
 		return noAddrError(defaultRouteIP())
 	}
+	var ca *certAuthority
+	var tlsConfig *tls.Config
+	if opts.https {
+		if ca, tlsConfig, err = startHTTPS(addrs); err != nil {
+			return err
+		}
+		share.handler = withCAPages(share.handler, ca)
+	}
 	ln, err := listen(share.port, opts.listenPort)
 	if err != nil {
 		return err
@@ -301,6 +338,9 @@ func serve(ctx context.Context, opts options, stdin io.Reader, stdout io.Writer)
 	chain := withLog(handler, stdout, time.Now)
 	tracker := newConnTracker()
 	lan := newServer(withLANEdge(chain), newConnLogger(stdout, time.Now), tracker)
+	if tlsConfig != nil {
+		lan.ErrorLog = log.New(quietHandshakes{serverLog}, "", log.LstdFlags)
+	}
 
 	var tun *tunnel
 	var tunnelSrv *http.Server
@@ -313,15 +353,19 @@ func serve(ctx context.Context, opts options, stdin io.Reader, stdout io.Writer)
 		defer tun.stop()
 		publicURL = tun.URL + suffix
 	}
-	printBanner(stdout, opts, share.what, addrs, actual, suffix, warning, publicURL)
+	printBanner(stdout, opts, share.what, addrs, actual, suffix, warning, publicURL, ca)
 
 	if opts.forDur > 0 {
 		var cancel context.CancelCauseFunc
 		ctx, cancel = expireAt(ctx, opts.forDur, time.Now)
 		defer cancel(nil)
 	}
+	lanLn := tracker.wrap(ln)
+	if tlsConfig != nil {
+		lanLn = tls.NewListener(lanLn, tlsConfig)
+	}
 	served := make(chan error, 1)
-	go func() { served <- lan.Serve(tracker.wrap(ln)) }()
+	go func() { served <- lan.Serve(lanLn) }()
 	var tunnelStopped <-chan error // stays nil, and so never ready, when there is no tunnel
 	if tun != nil {
 		tunnelStopped = tun.done
@@ -368,6 +412,22 @@ func newServer(handler http.Handler, onState func(net.Conn, http.ConnState), tra
 	}
 }
 
+// serverLog is where the servers' own error lines go. A variable so tests can read them.
+var serverLog io.Writer = os.Stderr
+
+// quietHandshakes is the error log of the https server. Every device that does not trust yonder's
+// certificate yet fails its first handshakes, and the server would print a line for each one;
+// those lines are dropped, and every other line goes on to w.
+type quietHandshakes struct{ w io.Writer }
+
+// Write drops a TLS handshake error and passes any other log line on.
+func (q quietHandshakes) Write(p []byte) (int, error) {
+	if bytes.Contains(p, []byte("TLS handshake error")) {
+		return len(p), nil
+	}
+	return q.w.Write(p)
+}
+
 // guard puts the access gate in front of handler, unless --open was given. It returns the
 // guarded handler, the text to add to the link ("/?yonder=<token>"), the warning line for the
 // banner, and a function that stops the terminal questions of --approve.
@@ -389,6 +449,56 @@ func guard(ctx context.Context, opts options, handler http.Handler, port int, st
 	return withAuthDevices(handler, token, port, devices), "/?yonder=" + token, warning, stop
 }
 
+// startHTTPS loads or makes yonder's certificate authority and returns it with the TLS settings
+// for serving addrs.
+func startHTTPS(addrs []net.IP) (*certAuthority, *tls.Config, error) {
+	dir, err := caDir()
+	if err != nil {
+		return nil, nil, err
+	}
+	ca, err := loadOrCreateCA(dir, time.Now())
+	if err != nil {
+		return nil, nil, err
+	}
+	cfg, err := ca.serverConfig(addrs, time.Now)
+	if err != nil {
+		return nil, nil, err
+	}
+	return ca, cfg, nil
+}
+
+// caCommand runs --ca, which shows where yonder's certificate is kept and its fingerprint, or,
+// with remove, --remove-ca, which deletes it.
+func caCommand(remove bool, stdout io.Writer) error {
+	dir, err := caDir()
+	if err != nil {
+		return err
+	}
+	if remove {
+		removed, err := removeCA(dir)
+		switch {
+		case err != nil:
+			return err
+		case removed:
+			say(stdout, "Removed yonder's certificate from %s.\nRemove it from the devices that trusted it too (the page at %s explains where).\n", dir, caPagePath)
+		default:
+			say(stdout, "Nothing to remove: yonder has no certificate in %s.\n", dir)
+		}
+		return nil
+	}
+	ca, err := loadCA(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		say(stdout, "yonder has no certificate yet. The first run with --https makes one in %s.\n", dir)
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("%w (yonder --remove-ca deletes the files, and the next --https run makes new ones)", err)
+	}
+	say(stdout, "%s\n  Certificate: %s\n  Fingerprint (SHA-256): %s\n  Valid until: %s\n",
+		ca.root.Subject.CommonName, filepath.Join(dir, caCertFile), fingerprint(ca.root.Raw), ca.root.NotAfter.Local().Format("2 Jan 2006"))
+	return nil
+}
+
 // startPublic starts the loopback listener that only the tunnel connects to, serving handler
 // with the tunnel edge rules, and starts cloudflared pointed at it.
 func startPublic(ctx context.Context, cloudflared string, handler http.Handler, tracker *connTracker) (*http.Server, *tunnel, error) {
@@ -408,9 +518,14 @@ func startPublic(ctx context.Context, cloudflared string, handler http.Handler, 
 
 // printBanner prints what is shared, the link (and any other links), the QR code, the access
 // warning, and notes about uploads, the time limit and WSL. With publicURL set, the public link
-// and its QR code come first and the local link follows.
-func printBanner(w io.Writer, opts options, what string, addrs []net.IP, port int, suffix, warning, publicURL string) {
-	lanURL := fmt.Sprintf("http://%s:%d%s", addrs[0], port, suffix)
+// and its QR code come first and the local link follows. With ca set (--https), the links use
+// https and a second link and QR code lead to the page that installs yonder's certificate.
+func printBanner(w io.Writer, opts options, what string, addrs []net.IP, port int, suffix, warning, publicURL string, ca *certAuthority) {
+	scheme := "http"
+	if ca != nil {
+		scheme = "https"
+	}
+	lanURL := fmt.Sprintf("%s://%s:%d%s", scheme, addrs[0], port, suffix)
 	if publicURL != "" {
 		say(w, "yonder: sharing %s\n\n  Public link: %s\n", what, publicURL)
 		qrterminal.GenerateHalfBlock(publicURL, qrterminal.L, w)
@@ -420,7 +535,7 @@ func printBanner(w io.Writer, opts options, what string, addrs []net.IP, port in
 		qrterminal.GenerateHalfBlock(lanURL, qrterminal.L, w)
 	}
 	for _, a := range addrs[1:] {
-		say(w, "  also: http://%s:%d%s\n", a, port, suffix)
+		say(w, "  also: %s://%s:%d%s\n", scheme, a, port, suffix)
 	}
 	say(w, "\n%s\n", warning)
 	if publicURL != "" {
@@ -434,6 +549,15 @@ func printBanner(w io.Writer, opts options, what string, addrs []net.IP, port in
 	}
 	if opts.forDur > 0 {
 		say(w, "This link works for %s, until %s.\n", humanDuration(opts.forDur), formatUntil(time.Now(), opts.forDur))
+	}
+	if ca != nil {
+		caURL := fmt.Sprintf("https://%s:%d%s%s", addrs[0], port, caPagePath, strings.TrimPrefix(suffix, "/"))
+		say(w, "\nHTTPS is on. Devices show a certificate warning until they trust yonder's certificate.\nTo trust it, open this on the device and follow the steps:\n  %s\n", caURL)
+		qrterminal.GenerateHalfBlock(caURL, qrterminal.L, w)
+		if ca.fresh {
+			say(w, "This is a new certificate (kept in %s); each device installs it once.\n", ca.dir)
+		}
+		say(w, "The page must show this fingerprint (SHA-256):\n  %s\n", fingerprint(ca.root.Raw))
 	}
 	if hint := detectWSLHint(); hint != "" {
 		say(w, "\n%s", hint)

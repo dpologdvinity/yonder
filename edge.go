@@ -39,11 +39,11 @@ type edgeInfo struct {
 	country string
 }
 
-// requestIsSecure reports whether the request reached yonder over https, which is only true
-// for requests that came through the tunnel listener.
+// requestIsSecure reports whether the request reached yonder over https: directly with --https,
+// or through the tunnel listener.
 func requestIsSecure(r *http.Request) bool {
 	info, _ := r.Context().Value(edgeKey{}).(edgeInfo)
-	return info.secure
+	return r.TLS != nil || info.secure
 }
 
 // requestCountry returns the visitor's two-letter country code as reported by the tunnel, or
