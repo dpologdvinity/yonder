@@ -69,7 +69,7 @@ go test -coverprofile=coverage.out ./... && go tool cover -func=coverage.out | t
 go tool cover -html=coverage.out   # opens a report in your browser
 ```
 
-CI requires at least 85% total coverage on Linux. Please do not let it fall.
+CI requires at least 85% total coverage on Linux. Please do not let it fall. Coverage for every commit on `master` is also on [Codecov](https://codecov.io/gh/dpologdvinity/yonder).
 
 ## How to make a change
 

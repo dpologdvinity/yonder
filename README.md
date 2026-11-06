@@ -3,6 +3,7 @@
 > your site, over yonder
 
 [![CI](https://github.com/dpologdvinity/yonder/actions/workflows/ci.yml/badge.svg)](https://github.com/dpologdvinity/yonder/actions/workflows/ci.yml)
+[![Coverage](https://codecov.io/gh/dpologdvinity/yonder/graph/badge.svg)](https://codecov.io/gh/dpologdvinity/yonder)
 [![Latest release](https://img.shields.io/github/v/release/dpologdvinity/yonder)](https://github.com/dpologdvinity/yonder/releases/latest)
 [![npm](https://img.shields.io/npm/v/yonder-cli?label=npm)](https://www.npmjs.com/package/yonder-cli)
 [![PyPI](https://img.shields.io/pypi/v/yonder-cli?label=PyPI)](https://pypi.org/project/yonder-cli/)

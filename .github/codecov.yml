@@ -1,0 +1,11 @@
+# Codecov settings. Codecov only shows coverage (the README badge and pull request
+# comments); the 85% floor that can fail a build is enforced in ci.yml. So its commit
+# checks are informational: they report, but never mark a commit as failed.
+coverage:
+  status:
+    project:
+      default:
+        informational: true
+    patch:
+      default:
+        informational: true

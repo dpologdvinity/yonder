@@ -262,7 +262,7 @@ Run everything with `go test ./...`. Tests are written first for new behaviour, 
 | Browser script | `upload_script_test.go` | The upload page's inline script, run in Node.js (skipped if Node is missing). |
 | Documentation | `doccheck_test.go` | Every Go file has a header comment, and every declaration a doc comment that starts with its name. |
 
-CI (`.github/workflows/ci.yml`) runs, in order and failing fast: dependency checks, then lint and static checks, then the tests on Linux, macOS and Windows (with the race detector on Linux and macOS), then a dry run of the release. Linux must keep total coverage at 85% or more; it is above 90% today.
+CI (`.github/workflows/ci.yml`) runs, in order and failing fast: dependency checks, then lint and static checks, then the tests on Linux, macOS and Windows (with the race detector on Linux and macOS), then a dry run of the release. Linux must keep total coverage at 85% or more; it is above 90% today. The Linux run also sends its coverage to Codecov for the README badge, signing in with the workflow's OIDC token so there is no secret to store; that upload never fails the build.
 
 Lint and static checks: `gofmt`, `go vet` (also for Windows and macOS), `golangci-lint` (with `errcheck`, `staticcheck`, `errorlint`, `bodyclose` and more, see `.golangci.yml`), `govulncheck`, `shellcheck`, `actionlint`, syntax checks of the npm and Python scripts, and `goreleaser check`.
 
