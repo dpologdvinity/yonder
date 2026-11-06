@@ -5,7 +5,7 @@
 // The first --https run creates a root certificate and uses it once, to sign an intermediate
 // certificate; the root key is then dropped and never written. The intermediate may only vouch
 // for private addresses (critical name constraints), so even if its key were stolen it could
-// not be used to impersonate a real website. Each run signs a new certificate for its own
+// not be used to impersonate a real website (only services at private addresses). Each run signs a new certificate for its own
 // addresses with a key that lives only in memory. A phone that installs the root (ca.crt) gets
 // no certificate warning; one that does not can still click through the warning.
 
@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"io"
 	"io/fs"
 	"math/big"
 	"net"
@@ -62,6 +63,17 @@ const leafLife = 30 * 24 * time.Hour
 
 // leafRenewBefore is how long before its end a run's certificate is replaced.
 const leafRenewBefore = 24 * time.Hour
+
+// lockFile is created in the authority's folder while a run loads or creates the authority, so
+// two runs started at once end up with the same one.
+const lockFile = ".lock"
+
+// lockWait is how long a run waits for another run's lock before giving up. Creating the
+// authority takes milliseconds. A variable so tests can shorten it.
+var lockWait = 10 * time.Second
+
+// lockStale is the age after which a lock is taken to be left behind by a run that crashed.
+const lockStale = time.Minute
 
 // userConfigDir finds the folder for per-user settings. A variable so tests can point it at a
 // temporary folder.
@@ -194,14 +206,16 @@ func (ca *certAuthority) leaf(ips []net.IP, now time.Time) (tls.Certificate, err
 // serverConfig returns the TLS settings for serving ips: a certificate for this run, replaced
 // leafRenewBefore before it ends (a run without --for can outlast it), TLS 1.2 or newer, and
 // HTTP/1.1 only. HTTP/2 would carry WebSockets differently, and yonder passes them to the app by
-// taking over an HTTP/1.1 connection, which it also tracks to close on exit.
-func (ca *certAuthority) serverConfig(ips []net.IP, now func() time.Time) (*tls.Config, error) {
+// taking over an HTTP/1.1 connection, which it also tracks to close on exit. A renewal that
+// fails is reported once on errOut; the server's own log drops handshake errors.
+func (ca *certAuthority) serverConfig(ips []net.IP, now func() time.Time, errOut io.Writer) (*tls.Config, error) {
 	first, err := ca.leaf(ips, now())
 	if err != nil {
 		return nil, err
 	}
 	var mu sync.Mutex
 	current := &first // replaced, never changed in place: a handshake may still be using it
+	reported := false
 	return &tls.Config{
 		MinVersion: tls.VersionTLS12,
 		NextProtos: []string{"http/1.1"},
@@ -211,6 +225,10 @@ func (ca *certAuthority) serverConfig(ips []net.IP, now func() time.Time) (*tls.
 			if t := now(); t.Add(leafRenewBefore).After(current.Leaf.NotAfter) {
 				next, err := ca.leaf(ips, t)
 				if err != nil {
+					if !reported {
+						reported = true
+						say(errOut, "yonder: could not renew the https certificate, so devices cannot connect: %v\n", err)
+					}
 					return nil, err
 				}
 				current = &next
@@ -232,8 +250,17 @@ func caDir() (string, error) {
 // loadOrCreateCA loads the authority in dir. When there is none yet, or it would expire before a
 // new certificate does, it makes a new one, saves it, and marks it fresh. Damaged or mismatched
 // files are an error, not replaced, so the owner learns that the root on their devices is
-// no longer the one in use.
+// no longer the one in use. It holds the folder's lock throughout, so runs started at the same
+// moment all use the authority that ends up on disk.
 func loadOrCreateCA(dir string, now time.Time) (*certAuthority, error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("creating the folder for yonder's certificate: %w", err)
+	}
+	unlock, err := lockFolder(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	ca, err := loadCA(dir)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
@@ -253,6 +280,32 @@ func loadOrCreateCA(dir string, now time.Time) (*certAuthority, error) {
 	}
 	ca.dir, ca.fresh = dir, true
 	return ca, nil
+}
+
+// lockFolder takes the lock in dir, waiting up to lockWait for another run to release it, and
+// returns the function that releases it. A lock older than lockStale is left over from a crash
+// and is taken over.
+func lockFolder(dir string) (unlock func(), err error) {
+	path := filepath.Join(dir, lockFile)
+	deadline := time.Now().Add(lockWait)
+	for {
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err == nil {
+			_ = f.Close() // empty; only its existence matters
+			return func() { _ = os.Remove(path) }, nil
+		}
+		if !errors.Is(err, fs.ErrExist) {
+			return nil, err
+		}
+		if info, statErr := os.Stat(path); statErr == nil && time.Since(info.ModTime()) > lockStale {
+			_ = os.Remove(path) // another waiting run may have removed it first
+			continue
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("another yonder is setting up the certificate; if none is running, delete %s", path)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 // loadCA reads the three files in dir and checks that they belong together. It returns an error
@@ -319,12 +372,9 @@ func parsePEMCert(data []byte) (*x509.Certificate, error) {
 	return x509.ParseCertificate(block.Bytes)
 }
 
-// saveCA writes ca to dir, which it creates if needed with access for the owner only. Each file
-// is written to a temporary name and then renamed, so a crash never leaves half a file.
+// saveCA writes ca to dir, which must exist. Each file is written to a temporary name and then
+// renamed, so a crash never leaves half a file.
 func saveCA(dir string, ca *certAuthority) error {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
 	keyDER, err := x509.MarshalPKCS8PrivateKey(ca.interKey)
 	if err != nil {
 		return err
@@ -380,6 +430,7 @@ func removeCA(dir string) (bool, error) {
 			return removed, err
 		}
 	}
+	_ = os.Remove(filepath.Join(dir, lockFile)) // only there if a run crashed; ignoring a missing one
 	if err := os.Remove(dir); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		entries, readErr := os.ReadDir(dir)
 		if readErr != nil || len(entries) == 0 {
@@ -402,11 +453,14 @@ func fingerprint(der []byte) string {
 }
 
 // withCAPages answers the two certificate paths in front of next: caPagePath, a page with the
-// fingerprint and the steps to trust yonder, and caCertPath, the root certificate itself (DER,
-// with the type that makes phones offer to install it). Every other path goes to next.
+// steps to trust yonder, and caCertPath, the root certificate itself (DER, with the type that
+// makes iPhones offer to install it, or with "?save" as a plain file, which Android needs). The
+// page does not show the fingerprint: it arrives over a connection the device cannot check yet,
+// so an attacker's copy could show the real one. Every other path goes to next, and so does every
+// request through the --public tunnel, because the certificate is only for this network.
 func withCAPages(next http.Handler, ca *certAuthority) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != caPagePath && r.URL.Path != caCertPath {
+		if fromTunnel(r) || (r.URL.Path != caPagePath && r.URL.Path != caCertPath) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -417,30 +471,35 @@ func withCAPages(next http.Handler, ca *certAuthority) http.Handler {
 		}
 		w.Header().Set("Cache-Control", "no-store")
 		if r.URL.Path == caCertPath {
-			w.Header().Set("Content-Type", "application/x-x509-ca-cert")
+			if r.URL.Query().Has("save") {
+				w.Header().Set("Content-Type", "application/octet-stream")
+				w.Header().Set("Content-Disposition", `attachment; filename="yonder-ca.crt"`)
+			} else {
+				w.Header().Set("Content-Type", "application/x-x509-ca-cert")
+			}
 			_, _ = w.Write(ca.root.Raw) // a client that went away cannot be helped
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		say(w, caPageHTML, html.EscapeString(ca.root.Subject.CommonName), fingerprint(ca.root.Raw), caCertPath)
+		say(w, caPageHTML, html.EscapeString(ca.root.Subject.CommonName), caCertPath, caCertPath+"?save")
 	})
 }
 
-// caPageHTML is the page at caPagePath. Its arguments are the root's name, its fingerprint and
-// the download path.
+// caPageHTML is the page at caPagePath. Its arguments are the root's name, the download path for
+// iPhones and the download path that saves a plain file.
 const caPageHTML = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Trust yonder on this device</title></head>
 <body style="font:16px/1.5 system-ui,sans-serif;margin:2rem;max-width:40rem">
 <h1>Trust yonder on this device</h1>
 <p>This removes the certificate warning for sites shared with <code>yonder --https</code> from the computer that showed you this link. The certificate, <b>%s</b>, can only vouch for addresses on private networks (such as 192.168.x.x), never for a real website.</p>
-<p><b>Check the fingerprint first.</b> It must match the one in the terminal of the computer that shares. If it does not, someone on this network swapped the file: do not install it.</p>
-<p style="word-break:break-all"><code>SHA-256 %s</code></p>
-<p><a href="%s" style="display:inline-block;padding:.6rem 1rem;background:#2563eb;color:#fff;border-radius:.4rem;text-decoration:none">Download the certificate</a></p>
+<p><b>Check the fingerprint in your device's own certificate details</b>, as the steps below show, and compare it with the one in the terminal of the computer that shares. It must match exactly. This page cannot show it for you: someone on this network could have sent you a fake copy of this page.</p>
 <h2>iPhone and iPad</h2>
-<ol><li>Tap Download (in Safari), then Allow.</li><li>Open Settings, tap <i>Profile Downloaded</i> near the top, then Install.</li><li>Open Settings &gt; General &gt; About &gt; Certificate Trust Settings and turn on the yonder certificate.</li></ol>
+<p><a href="%s" style="display:inline-block;padding:.6rem 1rem;background:#2563eb;color:#fff;border-radius:.4rem;text-decoration:none">Download the certificate</a></p>
+<ol><li>Tap Download (in Safari), then Allow.</li><li>Open Settings and tap <i>Profile Downloaded</i> near the top. Tap <i>More Details</i>, then the certificate, and compare its SHA-256 fingerprint with the terminal. If it differs, tap Remove.</li><li>If it matches, tap Install.</li><li>Open Settings &gt; General &gt; About &gt; Certificate Trust Settings and turn on the yonder certificate.</li></ol>
 <h2>Android</h2>
-<ol><li>Tap Download.</li><li>Open Settings and search for <i>CA certificate</i> (usually Security &gt; More security settings &gt; Encryption &amp; credentials &gt; Install a certificate &gt; CA certificate).</li><li>Choose <i>Install anyway</i> and pick the downloaded file. Chrome trusts it at once; Firefox needs <i>Use third party CA certificates</i> turned on in its secret settings.</li></ol>
+<p><a href="%s" style="display:inline-block;padding:.6rem 1rem;background:#2563eb;color:#fff;border-radius:.4rem;text-decoration:none">Save the certificate file</a></p>
+<ol><li>Tap Save. The file <i>yonder-ca.crt</i> goes to Downloads.</li><li>Open Settings and search for <i>CA certificate</i> (usually Security &gt; More security settings &gt; Encryption &amp; credentials &gt; Install a certificate &gt; CA certificate). Choose <i>Install anyway</i> and pick the file.</li><li>Then open Encryption &amp; credentials &gt; Trusted credentials &gt; User, tap the yonder certificate, and compare its SHA-256 fingerprint with the terminal. If it differs, remove it.</li><li>Chrome trusts it at once; Firefox needs <i>Use third party CA certificates</i> turned on in its secret settings.</li></ol>
 <h2>Computers</h2>
-<p>Open the downloaded file and trust it for websites: on a Mac, add it in Keychain Access and set it to Always Trust; on Windows, install it into <i>Trusted Root Certification Authorities</i>.</p>
+<p>Save the file with the Android button, compare its fingerprint (on a Mac, Keychain Access shows it; on Windows, the certificate's Details tab), then trust it for websites: on a Mac, set it to Always Trust in Keychain Access; on Windows, install it into <i>Trusted Root Certification Authorities</i>.</p>
 <h2>To undo</h2>
 <p>Remove the profile (iPhone: Settings &gt; General &gt; VPN &amp; Device Management) or the certificate (Android: Encryption &amp; credentials &gt; User credentials). On the computer, <code>yonder --remove-ca</code> deletes yonder's copy.</p>
 </body></html>`

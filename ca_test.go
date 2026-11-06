@@ -13,6 +13,7 @@ import (
 	"crypto/x509"
 	"encoding/asn1"
 	"encoding/pem"
+	"io"
 	"math/big"
 	"net"
 	"net/http"
@@ -378,6 +379,99 @@ func TestLoadOrCreateCARefusesAKeyOthersCanRead(t *testing.T) {
 	}
 }
 
+// TestServerTLSConfigReportsAFailedRenewal checks that a certificate that cannot be renewed is
+// reported once, where the owner sees it, instead of only failing every handshake in silence.
+func TestServerTLSConfigReportsAFailedRenewal(t *testing.T) {
+	ca := testCA(t)
+	start := time.Date(2026, 11, 7, 9, 0, 0, 0, time.UTC)
+	clock := start
+	var errOut strings.Builder
+	cfg, err := ca.serverConfig([]net.IP{net.ParseIP("192.168.1.20")}, func() time.Time { return clock }, &errOut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	must(t, err)
+	ca.interKey = other // signing with a key that does not match the intermediate fails
+	clock = start.Add(29*24*time.Hour + time.Minute)
+	for range 3 {
+		if _, err := cfg.GetCertificate(&tls.ClientHelloInfo{}); err == nil {
+			t.Fatal("renewal with the wrong key succeeded")
+		}
+	}
+	if got := errOut.String(); strings.Count(got, "yonder:") != 1 || !strings.Contains(got, "renew") {
+		t.Errorf("reported %q, want one line about renewing", got)
+	}
+}
+
+// TestLoadOrCreateCAIsSafeToRunTwiceAtOnce checks that yonders started at the same moment, all
+// creating the authority for the first time, end up with one authority: the one on disk.
+func TestLoadOrCreateCAIsSafeToRunTwiceAtOnce(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "yonder")
+	now := time.Now()
+	const n = 8
+	results := make(chan *certAuthority, n)
+	errs := make(chan error, n)
+	for range n {
+		go func() {
+			ca, err := loadOrCreateCA(dir, now)
+			results <- ca
+			errs <- err
+		}()
+	}
+	var got []*certAuthority
+	for range n {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, <-results)
+	}
+	onDisk, err := loadCA(dir)
+	if err != nil {
+		t.Fatalf("the files do not belong together after %d runs at once: %v", n, err)
+	}
+	fresh := 0
+	for _, ca := range got {
+		if !ca.root.Equal(onDisk.root) {
+			t.Error("a run uses a root that is not the one on disk")
+		}
+		if ca.fresh {
+			fresh++
+		}
+	}
+	if fresh != 1 {
+		t.Errorf("%d runs say they made the authority, want 1", fresh)
+	}
+}
+
+// TestLoadOrCreateCALock checks the lock that keeps two runs from creating the authority at once:
+// a lock left behind by a crash is taken over, and a live one makes the run wait and then give
+// up with a message that names the lock.
+func TestLoadOrCreateCALock(t *testing.T) {
+	old := lockWait
+	lockWait = 300 * time.Millisecond
+	defer func() { lockWait = old }()
+
+	dir := t.TempDir()
+	lock := filepath.Join(dir, ".lock")
+	must(t, os.WriteFile(lock, nil, 0o600))
+	long := time.Now().Add(-time.Hour)
+	must(t, os.Chtimes(lock, long, long))
+	if _, err := loadOrCreateCA(dir, time.Now()); err != nil {
+		t.Errorf("a stale lock stopped the run: %v", err)
+	}
+	if _, err := os.Stat(lock); !os.IsNotExist(err) {
+		t.Errorf("the lock is still there after the run: %v", err)
+	}
+
+	dir = t.TempDir()
+	lock = filepath.Join(dir, ".lock")
+	must(t, os.WriteFile(lock, nil, 0o600))
+	if _, err := loadOrCreateCA(dir, time.Now()); err == nil || !strings.Contains(err.Error(), lock) {
+		t.Errorf("err = %v, want a timeout that names %s", err, lock)
+	}
+}
+
 // TestRemoveCA checks that --remove-ca deletes yonder's files and folder, reports whether there
 // was anything to remove, and leaves files it did not make.
 func TestRemoveCA(t *testing.T) {
@@ -388,6 +482,7 @@ func TestRemoveCA(t *testing.T) {
 	if _, err := loadOrCreateCA(dir, time.Now()); err != nil {
 		t.Fatal(err)
 	}
+	must(t, os.WriteFile(filepath.Join(dir, ".lock"), nil, 0o600)) // left behind by a crash
 	if removed, err := removeCA(dir); err != nil || !removed {
 		t.Errorf("removeCA = %v, %v; want true, nil", removed, err)
 	}
@@ -417,8 +512,10 @@ func TestFingerprint(t *testing.T) {
 }
 
 // TestCAPages checks the pages that hand the root certificate to a phone: the download is the
-// DER certificate with the type phones install from, the page shows the fingerprint and the
-// steps, and every other path goes on to what is shared.
+// DER certificate with the type phones install from, a second download saves it as a plain file
+// (Android installs CA certificates only from a file), the page has the steps but no fingerprint,
+// because a page that arrives over an unchecked connection cannot vouch for one, and every other
+// path goes on to what is shared.
 func TestCAPages(t *testing.T) {
 	ca := testCA(t)
 	h := withCAPages(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { say(w, "app") }), ca)
@@ -430,12 +527,22 @@ func TestCAPages(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/.yonder/ca.crt?save", nil))
+	if rec.Code != 200 || rec.Header().Get("Content-Type") != "application/octet-stream" ||
+		rec.Header().Get("Content-Disposition") != `attachment; filename="yonder-ca.crt"` || rec.Body.String() != string(ca.root.Raw) {
+		t.Errorf("saved download: %d %q %q; want 200, a plain file named yonder-ca.crt and the DER root", rec.Code, rec.Header().Get("Content-Type"), rec.Header().Get("Content-Disposition"))
+	}
+
+	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/.yonder/ca", nil))
 	body := rec.Body.String()
-	for _, want := range []string{fingerprint(ca.root.Raw), `href="/.yonder/ca.crt"`, "iPhone", "Android", "Certificate Trust Settings"} {
+	for _, want := range []string{`href="/.yonder/ca.crt"`, `href="/.yonder/ca.crt?save"`, "iPhone", "Android", "Certificate Trust Settings", "More Details", "terminal"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("page lacks %q", want)
 		}
+	}
+	if strings.Contains(body, fingerprint(ca.root.Raw)) || strings.Contains(body, fingerprint(ca.root.Raw)[:20]) {
+		t.Error("the page shows the fingerprint; an attacker's copy of the page could show the real one too")
 	}
 	if rec.Header().Get("Content-Type") != "text/html; charset=utf-8" {
 		t.Errorf("page type %q", rec.Header().Get("Content-Type"))
@@ -454,6 +561,16 @@ func TestCAPages(t *testing.T) {
 			t.Errorf("%s did not reach the shared site", p)
 		}
 	}
+
+	// Through the --public tunnel the pages do not exist: the certificate is for this network.
+	tunneled := withTunnelEdge(h)
+	for _, p := range []string{"/.yonder/ca", "/.yonder/ca.crt"} {
+		rec = httptest.NewRecorder()
+		tunneled.ServeHTTP(rec, httptest.NewRequest("GET", p, nil))
+		if rec.Body.String() != "app" {
+			t.Errorf("%s through the tunnel answered %q, want the shared site", p, rec.Body.String())
+		}
+	}
 }
 
 // TestServerTLSConfig checks the TLS settings: TLS 1.2 or newer, HTTP/1.1 only (WebSockets reach
@@ -463,7 +580,7 @@ func TestServerTLSConfig(t *testing.T) {
 	ca := testCA(t)
 	start := time.Date(2026, 11, 7, 9, 0, 0, 0, time.UTC)
 	clock := start
-	cfg, err := ca.serverConfig([]net.IP{net.ParseIP("192.168.1.20")}, func() time.Time { return clock })
+	cfg, err := ca.serverConfig([]net.IP{net.ParseIP("192.168.1.20")}, func() time.Time { return clock }, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}

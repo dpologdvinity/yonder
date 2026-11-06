@@ -85,7 +85,7 @@ func TestHTTPSEndToEnd(t *testing.T) {
 	if link == "" || caLink == "" || !strings.Contains(caLink, "?yonder=") {
 		t.Fatalf("banner lacks the https link or the tokened certificate link:\n%s", banner)
 	}
-	for _, want := range []string{"HTTPS is on", fingerprint(ca.root.Raw), "new certificate", caFolder} {
+	for _, want := range []string{"HTTPS is on", fingerprint(ca.root.Raw), "certificate details", "new certificate", caFolder} {
 		if !strings.Contains(banner, want) {
 			t.Errorf("banner lacks %q:\n%s", want, banner)
 		}
@@ -111,8 +111,8 @@ func TestHTTPSEndToEnd(t *testing.T) {
 	if code, body := get(t, client, base+"/hello.txt"); code != 200 || body != "hi" {
 		t.Errorf("the file: %d %q, want 200 hi", code, body)
 	}
-	if code, body := get(t, trustingClient(ca.root, true), caLink); code != 200 || !strings.Contains(body, fingerprint(ca.root.Raw)) {
-		t.Errorf("the certificate page link: %d, want 200 and the fingerprint", code)
+	if code, body := get(t, trustingClient(ca.root, true), caLink); code != 200 || !strings.Contains(body, "Trust yonder on this device") {
+		t.Errorf("the certificate page link: %d, want 200 and the page", code)
 	}
 	if code, body := get(t, client, base+caCertPath); code != 200 || body != string(ca.root.Raw) {
 		t.Errorf("the certificate download: %d, %d bytes; want 200 and the root", code, len(body))
@@ -264,8 +264,8 @@ func TestRunCAShowsAndRemovesTheAuthority(t *testing.T) {
 		t.Errorf("--ca: %d %q; want the file, the name and the fingerprint", code, out)
 	}
 	out, _, code = runCommand("--remove-ca")
-	if code != 0 || !strings.Contains(out, "Removed") || !strings.Contains(out, "devices") {
-		t.Errorf("--remove-ca: %d %q; want 0, Removed, and a reminder about devices", code, out)
+	if code != 0 || !strings.Contains(out, "Removed") || !strings.Contains(out, "VPN & Device Management") || !strings.Contains(out, "User credentials") || strings.Contains(out, caPagePath) {
+		t.Errorf("--remove-ca: %d %q; want 0, Removed, and where to remove it on devices (not a page that is gone)", code, out)
 	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Errorf("the folder is still there after --remove-ca: %v", err)

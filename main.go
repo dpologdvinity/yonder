@@ -460,7 +460,7 @@ func startHTTPS(addrs []net.IP) (*certAuthority, *tls.Config, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	cfg, err := ca.serverConfig(addrs, time.Now)
+	cfg, err := ca.serverConfig(addrs, time.Now, serverLog)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -480,7 +480,7 @@ func caCommand(remove bool, stdout io.Writer) error {
 		case err != nil:
 			return err
 		case removed:
-			say(stdout, "Removed yonder's certificate from %s.\nRemove it from the devices that trusted it too (the page at %s explains where).\n", dir, caPagePath)
+			say(stdout, "Removed yonder's certificate from %s.\nRemove it from the devices that trusted it too:\n  iPhone and iPad: Settings > General > VPN & Device Management\n  Android: Settings > Encryption & credentials > User credentials\n  Mac: Keychain Access; Windows: Trusted Root Certification Authorities\n", dir)
 		default:
 			say(stdout, "Nothing to remove: yonder has no certificate in %s.\n", dir)
 		}
@@ -557,7 +557,7 @@ func printBanner(w io.Writer, opts options, what string, addrs []net.IP, port in
 		if ca.fresh {
 			say(w, "This is a new certificate (kept in %s); each device installs it once.\n", ca.dir)
 		}
-		say(w, "The page must show this fingerprint (SHA-256):\n  %s\n", fingerprint(ca.root.Raw))
+		say(w, "Before you trust it, the certificate details on the device must show this fingerprint (SHA-256):\n  %s\n", fingerprint(ca.root.Raw))
 	}
 	if hint := detectWSLHint(); hint != "" {
 		say(w, "\n%s", hint)

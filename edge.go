@@ -46,6 +46,12 @@ func requestIsSecure(r *http.Request) bool {
 	return r.TLS != nil || info.secure
 }
 
+// fromTunnel reports whether the request came through the --public tunnel listener.
+func fromTunnel(r *http.Request) bool {
+	_, ok := r.Context().Value(edgeKey{}).(edgeInfo)
+	return ok
+}
+
 // requestCountry returns the visitor's two-letter country code as reported by the tunnel, or
 // "" when there is none.
 func requestCountry(r *http.Request) string {
