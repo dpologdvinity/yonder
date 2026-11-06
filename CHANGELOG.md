@@ -4,6 +4,10 @@ All notable changes to yonder are listed here. The format follows [Keep a Change
 
 ## [Unreleased]
 
+### Added
+- `--https` serves the link on your network over HTTPS, so the camera, microphone, clipboard, service workers and `crypto.subtle` work on phones. yonder creates its own certificate authority on first use, limited by critical name constraints to private addresses, and keeps it in your settings folder; the root key is never written. Each run gets a fresh 30-day certificate whose key stays in memory, renewed by itself during long runs. A second link and QR code lead to a page with the certificate, its SHA-256 fingerprint and install steps for iPhone, Android and computers. Without installing it, devices can click through the usual warning.
+- `--ca` shows where yonder's certificate is kept and its fingerprint; `--remove-ca` deletes it.
+
 ## [0.6.1] - 2026-10-25
 
 ### Fixed
