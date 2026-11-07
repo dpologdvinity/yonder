@@ -1,8 +1,24 @@
-# Dependabot opens a pull request when a pinned GitHub Action has a new release, so the
-# commit hashes in .github/workflows stay current without being edited by hand.
+# Weekly dependency updates. Minor/patch bumps are grouped into one PR per
+# ecosystem; major bumps arrive as individual PRs for separate review.
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    commit-message:
+      prefix: "ci"
+      include: scope
+    groups:
+      github-actions-minor-patch:
+        update-types: ["minor", "patch"]
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore"
+      include: scope
+    groups:
+      gomod-minor-patch:
+        update-types: ["minor", "patch"]
