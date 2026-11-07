@@ -13,3 +13,7 @@ pre-commit:
       glob: "*.go"
       # Only report issues introduced by uncommitted changes.
       run: golangci-lint run --new-from-rev=HEAD ./...
+    typos:
+      # typos would scan binary assets when handed explicit paths.
+      exclude: "*.{gif,png,jpg,jpeg,webp,ico,svg,pdf,woff,woff2,ttf}"
+      run: typos --force-exclude {staged_files}
