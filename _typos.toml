@@ -1,0 +1,9 @@
+# typos config: https://github.com/crate-ci/typos
+[files]
+extend-exclude = [
+  "*.{gif,png,jpg,jpeg,webp,ico,svg,pdf,woff,woff2,ttf}",
+]
+
+[default.extend-words]
+# Windows error name ERROR_FILENAME_EXCED_RANGE (sic) in an upload.go comment.
+"exced" = "exced"
