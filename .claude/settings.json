@@ -1,0 +1,13 @@
+{
+  "worktree": { "bgIsolation": "none" },
+  "enabledPlugins": {
+    "gopls-lsp@claude-plugins-official": true,
+    "commit-commands@claude-plugins-official": true,
+    "ponytail@ponytail": true
+  },
+  "extraKnownMarketplaces": {
+    "ponytail": {
+      "source": { "source": "github", "repo": "DietrichGebert/ponytail" }
+    }
+  }
+}
