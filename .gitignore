@@ -8,5 +8,11 @@ npm/*.tgz
 
 # Secrets and generated files: never commit these
 .env
+.env.*
+!.env.example
+*.local.*
+*.pem
+*.key
+coverage.out
 __pycache__/
 *.pyc
