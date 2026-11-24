@@ -33,7 +33,8 @@ yonder assumes that other devices on your network are **not trusted** and that *
 - the token does not appear in logs or in `Referer` headers;
 - with `--approve`, a device that has the link still sees nothing until the owner allows it, and a device the owner refused stays refused for the rest of the run;
 - with `--for`, nothing is shared after the time is up;
-- with `--public`, the network port still only accepts private addresses, a remote visitor cannot choose the address yonder believes (forged `CF-Connecting-IP`, `X-Forwarded-For` and similar headers are ignored on the network port and removed on both), and the tunnel can reach only its own separate port.
+- with `--public`, the network port still only accepts private addresses, a remote visitor cannot choose the address yonder believes (forged `CF-Connecting-IP`, `X-Forwarded-For` and similar headers are ignored on the network port and removed on both), and the tunnel can reach only its own separate port;
+- with `--https`, the certificate authority yonder creates can only vouch for private addresses (critical name constraints, checked by the devices that trust it), its root key is never written to disk, its intermediate key is readable by the owner only, and each run's key never leaves memory.
 
 [ARCHITECTURE.md](ARCHITECTURE.md#7-security-design) explains how each of these is enforced and tested. A way around any of them is a vulnerability.
 
@@ -41,7 +42,9 @@ yonder assumes that other devices on your network are **not trusted** and that *
 
 These are known limits, described in the [README](README.md#known-limitations), not vulnerabilities:
 
-- **Traffic is plain HTTP.** On open Wi-Fi, or on WPA2 with a shared password, someone on the network can read it and copy the token. Use a trusted network, or do not share private data.
+- **Traffic is plain HTTP without `--https`.** On open Wi-Fi, or on WPA2 with a shared password, someone on the network can read it and copy the token. Use a trusted network, `--https`, or do not share private data.
+- **A device that clicks through the `--https` certificate warning** gets an encrypted connection, but cannot tell yonder from someone else on the network. Installing yonder's certificate fixes that, but only if the person compares the SHA-256 fingerprint in the **device's own certificate details** with the one in the terminal: someone on the network could send a fake certificate page, and a fingerprint shown on a page proves nothing (yonder's page deliberately shows none).
+- **Someone who can read your files** can take `intermediate.key` and, on any network, impersonate any HTTPS service at a private address (a router's admin page, a NAS, a printer, not only yonder) to devices that trust yonder's certificate, for as long as the certificate is valid (10 years). Name constraints stop it at real websites and public addresses. `yonder --remove-ca` and removing the certificate from your devices revoke it.
 - **Programs on your own computer** can connect to the loopback tunnel port and claim any visitor address or country in the approval question. They still need the token.
 - **Cloudflare can read `--public` traffic**, including the token and cookies, because it ends the TLS connection. Quick tunnels also have no uptime promise.
 - **`--open` has no token** by design. Use it only on networks you trust.

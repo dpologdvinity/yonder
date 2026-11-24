@@ -7,6 +7,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
@@ -219,6 +220,9 @@ func newConnTracker() *connTracker { return &connTracker{conns: map[net.Conn]str
 func (t *connTracker) track(c net.Conn, s http.ConnState) {
 	if s != http.StateHijacked {
 		return
+	}
+	if tc, ok := c.(*tls.Conn); ok {
+		c = tc.NetConn() // the trackedConn below it, which is what untrack is called with
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()

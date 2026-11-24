@@ -43,6 +43,10 @@ func TestParseArgs(t *testing.T) {
 		{[]string{"--for", "1d", "./docs"}, options{path: "./docs", forDur: 24 * time.Hour}},
 		{[]string{"--version"}, options{showVersion: true}},
 		{[]string{"3000", "--version"}, options{showVersion: true}},
+		{[]string{"3000", "--https"}, options{port: 3000, https: true}},
+		{[]string{"--https", "./docs", "--open"}, options{path: "./docs", https: true, open: true}},
+		{[]string{"--ca"}, options{showCA: true}},
+		{[]string{"--remove-ca"}, options{removeCA: true}},
 	}
 	for _, tt := range ok {
 		got, err := parseArgs(tt.args)
@@ -51,7 +55,7 @@ func TestParseArgs(t *testing.T) {
 		}
 	}
 
-	bad := [][]string{{}, {""}, {"3000", "--upload"}, {"0"}, {"70000"}, {"-1"}, {"3000", "4000"}, {"3000", "--listen", "x"}, {"3000", "--listen", "70000"}, {"3000", "--nope"}, {"3000", "--approve", "--open"}, {"3000", "--for", "soon"}, {"3000", "--for", "0"}, {"3000", "--for"}}
+	bad := [][]string{{}, {""}, {"3000", "--upload"}, {"0"}, {"70000"}, {"-1"}, {"3000", "4000"}, {"3000", "--listen", "x"}, {"3000", "--listen", "70000"}, {"3000", "--nope"}, {"3000", "--approve", "--open"}, {"3000", "--for", "soon"}, {"3000", "--for", "0"}, {"3000", "--for"}, {"3000", "--ca"}, {"--ca", "./docs"}, {"--remove-ca", "3000"}, {"--ca", "--remove-ca"}, {"--ca", "--https"}}
 	for _, args := range bad {
 		if _, err := parseArgs(args); err == nil {
 			t.Errorf("parseArgs(%q): want error, got nil", args)
